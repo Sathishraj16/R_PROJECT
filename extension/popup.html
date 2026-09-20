@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ScamTracer AI</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      width: 280px;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      font-size: 13px;
+      color: #2c3e50;
+      background: #fff;
+    }
+    .header {
+      background: #2c3e50;
+      color: #fff;
+      padding: 12px 16px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .header-title { font-size: 14px; font-weight: 700; }
+    .header-sub   { font-size: 10px; color: #95a5a6; margin-top: 1px; }
+    .section {
+      padding: 10px 16px;
+      border-bottom: 1px solid #ecf0f1;
+    }
+    .section:last-child { border-bottom: none; }
+    .row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 4px;
+    }
+    .row:last-child { margin-bottom: 0; }
+    .label { color: #7f8c8d; font-size: 11px; text-transform: uppercase; letter-spacing: 0.4px; }
+    .value { font-weight: 600; font-size: 13px; }
+    .status-connected    { color: #27ae60; }
+    .status-disconnected { color: #e74c3c; }
+    .badge {
+      display: inline-block;
+      padding: 1px 8px;
+      border-radius: 12px;
+      font-size: 11px;
+      font-weight: 600;
+    }
+    .badge-high     { background: #fde8e8; color: #c0392b; }
+    .badge-medium   { background: #fef9e7; color: #d68910; }
+    .badge-low      { background: #eafaf1; color: #1e8449; }
+    .badge-none     { background: #ecf0f1; color: #7f8c8d; }
+    .pending-list   { margin-top: 6px; }
+    .pending-item {
+      padding: 5px 8px;
+      background: #fdf3f3;
+      border-radius: 4px;
+      margin-bottom: 4px;
+      font-size: 12px;
+      border-left: 3px solid #e74c3c;
+    }
+    .pending-item .score  { float: right; font-weight: 700; color: #c0392b; }
+    .pending-empty { font-size: 12px; color: #95a5a6; }
+    .footer {
+      padding: 8px 16px;
+      font-size: 10px;
+      color: #bdc3c7;
+      text-align: center;
+      border-top: 1px solid #ecf0f1;
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div>
+      <div class="header-title">ScamTracer AI</div>
+      <div class="header-sub">H.I.V.E. — Heuristic Intelligence &amp; Virtual Entrapment</div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="row">
+      <span class="label">Backend</span>
+      <span class="value" id="status-indicator">Checking…</span>
+    </div>
+    <div class="row">
+      <span class="label">WhatsApp</span>
+      <span class="value" id="wa-status">—</span>
+    </div>
+    <div class="row">
+      <span class="label">Risk threshold</span>
+      <span class="value" id="threshold">—</span>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="row">
+      <span class="label">Latest risk</span>
+      <span id="latest-risk" class="badge badge-none">—</span>
+    </div>
+    <div class="row">
+      <span class="label">Pending alerts</span>
+      <span class="value" id="pending-count">—</span>
+    </div>
+    <div class="pending-list" id="pending-list"></div>
+  </div>
+
+  <div class="footer">Open WhatsApp Web to see live alerts</div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

@@ -1,0 +1,29 @@
+{
+  "manifest_version": 3,
+  "name": "ScamTracer AI",
+  "version": "1.0.0",
+  "description": "Real-time scam detection alerts for WhatsApp Web. Powered by H.I.V.E. — Heuristic Intelligence and Virtual Entrapment.",
+
+  "permissions": ["storage"],
+  "host_permissions": ["http://localhost:3000/*"],
+
+  "background": {
+    "service_worker": "background.js"
+  },
+
+  "content_scripts": [
+    {
+      "matches": ["https://web.whatsapp.com/*"],
+      "js": ["content.js"],
+      "css": ["styles.css"],
+      "run_at": "document_idle"
+    }
+  ],
+
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "ScamTracer AI"
+  },
+
+  "icons": {}
+}

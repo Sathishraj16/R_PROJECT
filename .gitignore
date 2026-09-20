@@ -1,0 +1,35 @@
+# Node.js
+nodejs/node_modules/
+nodejs/npm-debug.log*
+
+# R / renv
+renv/library/
+renv/.cache/
+.Rhistory
+.RData
+.Rproj.user/
+*.Rout
+
+# Data — never commit raw datasets or sensitive data
+data/raw/
+data/processed/
+data/demo/
+
+# Models — trained model files can be large
+models/*.rds
+models/*.pkl
+
+# Reports — generated output
+reports/*.pdf
+reports/*.html
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+
+# WhatsApp Web session files — contain authentication state; never commit
+.wwebjs_auth/
+.wwebjs_cache/

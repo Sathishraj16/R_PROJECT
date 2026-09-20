@@ -1,0 +1,211 @@
+/* ScamTracer AI — Floating Alert Panel Styles */
+
+.scamtracer-panel {
+  position: fixed;
+  top: 80px;
+  right: 24px;
+  z-index: 2147483647;
+  width: 360px;
+  border-radius: 10px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.28);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+  background: #fff;
+  border-left: 6px solid #e74c3c;
+  animation: scamtracer-slide-in 0.25s ease-out;
+  /* stack multiple panels vertically */
+  margin-bottom: 12px;
+}
+
+.scamtracer-panel + .scamtracer-panel {
+  margin-top: 0;
+}
+
+@keyframes scamtracer-slide-in {
+  from { opacity: 0; transform: translateX(40px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+
+/* ── Risk level border colours ── */
+.scamtracer-risk-critical { border-left-color: #c0392b; }
+.scamtracer-risk-high     { border-left-color: #e74c3c; }
+.scamtracer-risk-medium   { border-left-color: #f39c12; }
+
+/* ── Header ── */
+.scamtracer-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px 6px;
+  border-bottom: 1px solid #f0f0f0;
+}
+
+.scamtracer-logo {
+  font-weight: 700;
+  font-size: 13px;
+  color: #2c3e50;
+  letter-spacing: 0.3px;
+}
+
+.scamtracer-badge {
+  background: #e74c3c;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 20px;
+  letter-spacing: 0.2px;
+}
+
+.scamtracer-risk-critical .scamtracer-badge { background: #c0392b; }
+.scamtracer-risk-medium   .scamtracer-badge { background: #f39c12; }
+
+/* ── Body ── */
+.scamtracer-body {
+  padding: 10px 14px 6px;
+}
+
+.scamtracer-label {
+  margin: 0 0 6px;
+  font-size: 12px;
+  color: #7f8c8d;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.scamtracer-quote {
+  margin: 0;
+  padding: 8px 10px;
+  background: #fdf3f3;
+  border-left: 3px solid #e74c3c;
+  border-radius: 4px;
+  font-size: 13px;
+  color: #2c3e50;
+  word-break: break-word;
+}
+
+.scamtracer-risk-medium .scamtracer-quote {
+  background: #fef9e7;
+  border-left-color: #f39c12;
+}
+
+/* ── Action buttons ── */
+.scamtracer-actions {
+  display: flex;
+  gap: 8px;
+  padding: 10px 14px 6px;
+}
+
+.scamtracer-btn {
+  flex: 1;
+  padding: 8px 4px;
+  border: none;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity 0.15s, transform 0.1s;
+}
+
+.scamtracer-btn:hover:not(:disabled) {
+  opacity: 0.88;
+  transform: translateY(-1px);
+}
+
+.scamtracer-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.scamtracer-btn-block {
+  background: #e74c3c;
+  color: #fff;
+}
+
+.scamtracer-btn-hive {
+  background: #2c3e50;
+  color: #fff;
+}
+
+/* ── Footer note ── */
+.scamtracer-note {
+  margin: 0;
+  padding: 4px 14px 10px;
+  font-size: 11px;
+  color: #95a5a6;
+  text-align: center;
+}
+
+/* ── Success state (brief display before panel removal) ── */
+.scamtracer-success {
+  border-left-color: #27ae60 !important;
+  background: #f0fff4;
+}
+
+.scamtracer-success .scamtracer-badge {
+  background: #27ae60 !important;
+}
+
+.scamtracer-success-msg {
+  margin: 4px 0 10px;
+  padding: 8px 14px;
+  text-align: center;
+  font-size: 14px;
+  font-weight: 700;
+  color: #27ae60;
+  letter-spacing: 0.5px;
+}
+
+/* ── Error message ── */
+.scamtracer-error {
+  margin: 0;
+  padding: 4px 14px 10px;
+  font-size: 12px;
+  color: #c0392b;
+  text-align: center;
+}
+
+/* ── Meta row (Risk Level | Risk Score | Prediction) ── */
+.scamtracer-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  margin-bottom: 6px;
+  font-size: 12px;
+  color: #2c3e50;
+}
+
+.scamtracer-meta-item strong { font-weight: 700; }
+
+.scamtracer-meta-sep {
+  color: #bdc3c7;
+  font-size: 11px;
+}
+
+/* ── Sender line ── */
+.scamtracer-sender {
+  margin: 0 0 8px;
+  font-size: 12px;
+  color: #555;
+  word-break: break-all;
+}
+
+/* ── Indicator list ── */
+.scamtracer-indicators {
+  margin: 0 0 4px;
+  padding: 0 0 0 16px;
+  font-size: 12px;
+  color: #2c3e50;
+}
+
+.scamtracer-indicator { margin-bottom: 2px; }
+
+.scamtracer-indicator-none {
+  list-style: none;
+  margin-left: -16px;
+  color: #95a5a6;
+  font-style: italic;
+}

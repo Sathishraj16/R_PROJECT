@@ -1,0 +1,33 @@
+{
+  "name": "scamtracer-ai-comms",
+  "version": "0.1.0",
+  "description": "ScamTracer AI — Node.js communication and integration layer. Relays conversation data to the R Plumber API and presents results to the user. Does NOT perform analytical or ML work.",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node src/server.js",
+    "test": "node ../tests/test_integration.js"
+  },
+  "keywords": [
+    "scamtracer",
+    "hive",
+    "scam-detection",
+    "communication-layer"
+  ],
+  "author": "",
+  "license": "UNLICENSED",
+  "dependencies": {
+    "axios": "^1.7.0",
+    "express": "^4.19.0",
+    "qrcode-terminal": "^0.12.0",
+    "whatsapp-web.js": "^1.34.7"
+  },
+  "engines": {
+    "node": ">=18.0.0",
+    "npm": ">=9.0.0"
+  },
+  "notes": {
+    "whatsapp_library": "NOT SELECTED YET — will be added in a future phase",
+    "r_api_url": "http://localhost:8000 — R Plumber API (must be running separately)"
+  }
+}
