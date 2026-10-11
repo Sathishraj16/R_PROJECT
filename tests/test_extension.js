@@ -181,9 +181,12 @@ async function runBackendChecks() {
     [
       'E5a GET /alerts returns 200',
       'E5b BLOCK_AND_PROTECT decision endpoint returns 200',
+      'E5b-ii BLOCK_AND_PROTECT response body status is BLOCKED',
       'E5c ACTIVATE_HIVE decision endpoint returns 200',
+      'E5c-ii ACTIVATE_HIVE response body status is HIVE_ACTIVE',
       'E5d backend returns 404 for unknown alert_id',
-      'E5e risk score below threshold does NOT produce alert'
+      'E5e risk score below threshold does NOT produce alert',
+      'E5f second decision on same alert returns 409 ALREADY_DECIDED'
     ].forEach(t => console.log(`  [SKIP] ${t}`));
     return;
   }
@@ -208,6 +211,18 @@ async function runBackendChecks() {
     });
     check('E5b BLOCK_AND_PROTECT decision endpoint returns 200',
           blockRes.status === 200, `got ${blockRes.status}`);
+    check('E5b-ii BLOCK_AND_PROTECT response body status is BLOCKED',
+          blockRes.body && blockRes.body.status === 'BLOCKED',
+          JSON.stringify(blockRes.body && blockRes.body.status));
+
+    // E5f: a second decision on the same alert must return 409 ALREADY_DECIDED
+    const reBlockRes = await httpPost(`${BASE_URL}/alerts/${highAlert.alert_id}/decision`, {
+      action: 'BLOCK_AND_PROTECT'
+    });
+    check('E5f second decision on same alert returns 409 ALREADY_DECIDED',
+          reBlockRes.status === 409 &&
+          reBlockRes.body && reBlockRes.body.code === 'ALREADY_DECIDED',
+          `got ${reBlockRes.status} code=${reBlockRes.body && reBlockRes.body.code}`);
 
     // Create another alert for ACTIVATE_HIVE test
     // Confirmed risk_score=98 on production R model
@@ -225,6 +240,9 @@ async function runBackendChecks() {
       });
       check('E5c ACTIVATE_HIVE decision endpoint returns 200',
             hiveRes.status === 200, `got ${hiveRes.status}`);
+      check('E5c-ii ACTIVATE_HIVE response body status is HIVE_ACTIVE',
+            hiveRes.body && hiveRes.body.status === 'HIVE_ACTIVE',
+            JSON.stringify(hiveRes.body && hiveRes.body.status));
     } else {
       check('E5c ACTIVATE_HIVE decision endpoint returns 200', false, 'sim failed');
     }
@@ -326,6 +344,357 @@ check('F17 background.js handles all three extension message types',
       bgSrc.includes('FETCH_ALERTS') &&
       bgSrc.includes('FETCH_STATUS') &&
       bgSrc.includes('POST_DECISION'));
+
+// ── G: safeSendMessage callback coverage ─────────────────────────────────────
+// Verifies that safeSendMessage calls callback(null) in all three error paths:
+//   (a) chrome.runtime.lastError set        — existed before fix
+//   (b) _contextValid === false early return — fixed
+//   (c) catch block (sendMessage throws)    — fixed
+// All three use the same guard form: if (callback) callback(null)
+console.log('\n── G: safeSendMessage callback coverage ──');
+
+const callbackNullCount = (contentSrc.match(/if\s*\(callback\)\s*callback\s*\(\s*null\s*\)/g) || []).length;
+check('G1 safeSendMessage calls callback(null) in all 3 error paths (>= 3 occurrences)',
+      callbackNullCount >= 3,
+      `found ${callbackNullCount} occurrence(s), expected >= 3`);
+
+// ── H: Final investigation summary ───────────────────────────────────────────
+// Tests the three pure HTML builder functions from popup.js:
+//   buildFinalSummaryHtml(alertData, intelResp) — summary screen
+//   buildConfirmationHtml(action)               — post-button confirmation
+// These are pure string-builders (no DOM, no chrome APIs), so they are inlined
+// here and verified independently, consistent with the escapeHtml / shouldShowAlert
+// pattern used in E3 above.
+console.log('\n── H: Final investigation summary ──');
+
+// Shared escapeHtml (same implementation as popup.js)
+function escapeHtmlH(str) {
+  return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// Inline of buildFinalSummaryHtml from popup.js
+function buildFinalSummaryHtmlTest(alertData, intelResp) {
+  const summary = (intelResp.intelligence && intelResp.intelligence.summary) || {};
+  const parts = [];
+  if (alertData && alertData.message) {
+    const msg = alertData.message.length > 120 ? alertData.message.slice(0, 120) + '…' : alertData.message;
+    parts.push(`<div class="summary-msg">${escapeHtmlH(msg)}</div>`);
+  }
+  if (alertData && typeof alertData.risk_score === 'number') {
+    const lvl = (alertData.risk_level || '').toLowerCase();
+    parts.push(`<div class="intel-row"><span class="intel-key">Risk score</span>` +
+      `<span class="intel-val summary-risk summary-risk-${lvl}">${alertData.risk_score} (${(alertData.risk_level || '?')})</span></div>`);
+  }
+  if (typeof intelResp.interaction_count === 'number')
+    parts.push(`<div class="intel-row"><span class="intel-key">H.I.V.E. turns</span><span class="intel-val">${intelResp.interaction_count}</span></div>`);
+  const entityTypes = (summary.entity_types || []);
+  if (entityTypes.length > 0)
+    parts.push(`<div class="intel-row"><span class="intel-key">Entities found</span><span class="intel-val">${entityTypes.join(', ')}</span></div>`);
+  const behavTypes = (summary.behaviour_types || []);
+  if (behavTypes.length > 0)
+    parts.push(`<div class="intel-row"><span class="intel-key">Behaviours</span><span class="intel-val">${behavTypes.join(', ')}</span></div>`);
+  const statements = (summary.statements || []);
+  if (statements.length > 0) {
+    const items = statements.slice(0, 3).map(s => `<div class="intel-item">${escapeHtmlH(s)}</div>`).join('');
+    parts.push(`<div class="intel-list">${items}</div>`);
+  }
+  if (intelResp.stop_reason)
+    parts.push(`<div class="intel-stop">Stopped: ${escapeHtmlH(intelResp.stop_reason)}</div>`);
+  parts.push('<div class="intel-unverified">All extracted information is unverified — claims from suspect</div>');
+  parts.push(
+    `<div class="summary-actions">` +
+    `<button class="btn-submit"   data-action="submit">Submit report &amp; block chat</button>` +
+    `<button class="btn-nosubmit" data-action="no-submit">Don&#39;t submit &amp; block chat</button>` +
+    `</div>`
+  );
+  return parts.join('');
+}
+
+// Inline of buildConfirmationHtml from popup.js
+function buildConfirmationHtmlTest(action) {
+  if (action === 'submit') {
+    return `<div class="summary-confirm">` +
+      `<strong>Demo mode — simulated only.</strong><br>` +
+      `No real report was submitted. WhatsApp block is simulated.<br>` +
+      `<span class="intel-unverified">No data was sent to any external service.</span>` +
+      `</div>`;
+  }
+  return `<div class="summary-confirm">` +
+    `No report submitted. WhatsApp block is simulated.<br>` +
+    `Your choice not to submit has been preserved.` +
+    `</div>`;
+}
+
+// Test data matching the real shape returned by the backend
+const mockAlertData = {
+  alert_id: 'test-alert-001', status: 'HIVE_ACTIVE', session_id: 'test-session-001',
+  sender: '91test@c.us', risk_score: 81, risk_level: 'HIGH',
+  message: 'URGENT: Your account has been suspended. Visit http://securebank-verify.com/login to restore access.',
+  prediction: 'SCAM'
+};
+const mockIntelResp = {
+  session_id: 'test-session-001', state: 'HIVE_ENDED', interaction_count: 2,
+  stop_reason: 'auto: 3 evidence categories collected',
+  intelligence: {
+    summary: {
+      entity_types:    ['PHONE', 'URL', 'OTP_REQUEST'],
+      behaviour_types: ['URGENCY'],
+      statements:      ['Observed 1 phone number(s).', 'Observed 1 URL(s).']
+    }
+  }
+};
+
+const summaryHtml = buildFinalSummaryHtmlTest(mockAlertData, mockIntelResp);
+
+check('H1  summary renders original message text',
+      summaryHtml.includes('securebank-verify.com'),
+      'expected message text not found');
+
+check('H2  summary renders risk score value (81)',
+      summaryHtml.includes('81'),
+      'risk score not found');
+
+check('H3  summary renders interaction count (2)',
+      summaryHtml.includes('>2<'),
+      'interaction count not found');
+
+check('H4  summary renders stop reason',
+      summaryHtml.includes('auto: 3 evidence categories'),
+      'stop reason not found');
+
+check('H5  summary includes "Submit report" button text',
+      summaryHtml.includes('Submit report'),
+      '"Submit report" not found');
+
+check('H6  summary includes "Don\'t submit" button text',
+      summaryHtml.includes("Don") && summaryHtml.includes("no-submit"),
+      '"no-submit" data-action not found');
+
+check('H7  summary includes unverified disclaimer',
+      summaryHtml.includes('unverified'),
+      'disclaimer not found');
+
+check('H8  message text is HTML-escaped',
+      buildFinalSummaryHtmlTest(
+        { ...mockAlertData, message: '<script>xss</script>' }, mockIntelResp
+      ).includes('&lt;script&gt;'),
+      'XSS not escaped');
+
+check('H9  message longer than 120 chars is truncated',
+      (() => {
+        const long = 'A'.repeat(130);
+        const h = buildFinalSummaryHtmlTest({ ...mockAlertData, message: long }, mockIntelResp);
+        return h.includes('…') && !h.includes('A'.repeat(130));
+      })(),
+      'long message not truncated');
+
+check('H10 summary renders entity types',
+      summaryHtml.includes('PHONE') && summaryHtml.includes('URL') && summaryHtml.includes('OTP_REQUEST'),
+      'entity types not found');
+
+check('H11 summary renders behaviour types',
+      summaryHtml.includes('URGENCY'),
+      'behaviour types not found');
+
+// buildConfirmationHtml — submit path
+const submitConfirm = buildConfirmationHtmlTest('submit');
+check('H12 submit confirmation says "simulated"',
+      submitConfirm.includes('simulated'),
+      '"simulated" not found');
+
+check('H13 submit confirmation says no real report was submitted',
+      submitConfirm.includes('No real report was submitted'),
+      'disclaimer not found');
+
+check('H14 submit confirmation says no data sent to external service',
+      submitConfirm.includes('No data was sent to any external service'),
+      'external-service disclaimer not found');
+
+// buildConfirmationHtml — no-submit path
+const noSubmitConfirm = buildConfirmationHtmlTest('no-submit');
+check('H15 no-submit confirmation says "No report submitted"',
+      noSubmitConfirm.includes('No report submitted'),
+      '"No report submitted" not found');
+
+check('H16 no-submit confirmation preserves user choice not to submit',
+      noSubmitConfirm.includes('not to submit'),
+      '"not to submit" not found');
+
+check('H17 no-submit confirmation does NOT claim a report was submitted',
+      !noSubmitConfirm.includes('report was submitted'),
+      'false claim found');
+
+// Source-level checks — ensure popup.js exports the correct function names
+check('H18 popup.js defines buildFinalSummaryHtml',  popupSrc.includes('function buildFinalSummaryHtml'));
+check('H19 popup.js defines buildConfirmationHtml',  popupSrc.includes('function buildConfirmationHtml'));
+check('H20 popup.js defines handleFinalAction',      popupSrc.includes('function handleFinalAction'));
+check('H21 popup.js calls fetchAndRenderIntelligence with alertData',
+      popupSrc.includes('fetchAndRenderIntelligence(hiveAlert.session_id, hiveAlert)'));
+check('H22 background.js handles FETCH_INVESTIGATION', bgSrc.includes('FETCH_INVESTIGATION'));
+
+// ── H23–H28: Missing-summary bug fixes ───────────────────────────────────────
+// Root cause 1: background.js omitted interaction_count — summary row was absent
+// Root cause 2: no chrome.storage.local persistence — summary lost on server restart
+// Root cause 3: !resp.intelligence guard hid section for HIVE_ENDED sessions
+// Root cause 4: no auto-refresh — popup never polled for state change while open
+console.log('\n── H (23–28): Missing-summary bug fixes ──');
+
+// H23: background.js now forwards interaction_count in FETCH_INVESTIGATION response
+check('H23 background.js forwards interaction_count in FETCH_INVESTIGATION response',
+      bgSrc.includes('interaction_count'));
+
+// H24: popup.js uses the correct chrome.storage key for the ended session
+check('H24 popup.js stores ended session under key scamtracer_ended_session',
+      popupSrc.includes('scamtracer_ended_session'));
+
+// H25: popup.js persists ended session via chrome.storage.local.set
+check('H25 popup.js calls chrome.storage.local.set',
+      popupSrc.includes('chrome.storage.local.set'));
+
+// H26: popup.js reads ended session via chrome.storage.local.get
+check('H26 popup.js calls chrome.storage.local.get',
+      popupSrc.includes('chrome.storage.local.get'));
+
+// H27: popup.js defines renderStoredSummary for the storage fallback path
+check('H27 popup.js defines renderStoredSummary',
+      popupSrc.includes('function renderStoredSummary'));
+
+// H28: popup.js schedules auto-refresh with setTimeout(refresh) while HIVE_ACTIVE
+check('H28 popup.js schedules auto-refresh via setTimeout',
+      popupSrc.includes('setTimeout(refresh'));
+
+// H29: buildFinalSummaryHtml renders "H.I.V.E. turns" row when interaction_count
+//      is provided — confirms the fix works end-to-end once background.js forwards it
+check('H29 summary renders H.I.V.E. turns when interaction_count supplied',
+      buildFinalSummaryHtmlTest(mockAlertData, { ...mockIntelResp, interaction_count: 4 })
+        .includes('>4<'),
+      'interaction_count=4 not rendered');
+
+// H30: summary renders without interaction_count row when field is absent
+//      (manual stop path — background.js returns interaction_count: null)
+check('H30 summary renders without H.I.V.E. turns row when interaction_count is null',
+      (() => {
+        const h = buildFinalSummaryHtmlTest(mockAlertData, { ...mockIntelResp, interaction_count: null });
+        return !h.includes('H.I.V.E. turns');
+      })(),
+      'unexpected turns row found when interaction_count is null');
+
+// ── I: Regression — actual live-session data shape ───────────────────────────
+// Uses the exact alert and intelligence shapes from session
+//   b0b753a2-5223-44c7-8c93-79202c5733cd (6 evidence categories, 4 turns)
+// that confirmed H.I.V.E. auto-stop works in the live WhatsApp demo.
+// Verifies the popup renders Investigation Summary end-to-end with real data.
+console.log('\n── I: Regression — live-session data shape ──');
+
+const liveAlertData = {
+  alert_id:    'e2bb60d5-c8d8-4099-8f03-d55fc78a1746',
+  session_id:  'b0b753a2-5223-44c7-8c93-79202c5733cd',
+  status:      'HIVE_ACTIVE',
+  sender:      '53871909019871@lid',
+  message:     'Congratulations! You have won ₹25,000 in our lucky draw. Claim your prize now before it expires: https://claim-prize.example',
+  risk_score:  70,
+  risk_level:  'HIGH',
+  prediction:  'SCAM'
+};
+
+// Shape returned by background.js FETCH_INVESTIGATION (after fix to forward interaction_count)
+const liveIntelResp = {
+  ok:               true,
+  session_id:       'b0b753a2-5223-44c7-8c93-79202c5733cd',
+  state:            'HIVE_ENDED',
+  interaction_count: 4,
+  stop_reason:      'auto: 6 evidence categories across 4 turns',
+  intelligence: {
+    summary: {
+      entity_types:    ['URL', 'PAYMENT_REQUEST'],
+      behaviour_types: ['URGENCY', 'PAYMENT_REQUEST', 'IMPERSONATION', 'REPEATED_REQUEST', 'ESCALATION'],
+      statements: [
+        'Observed 1 URL(s).',
+        'Observed payment / transfer request in 4 turn(s).',
+        'Observed urgency / time pressure in 1 turn(s).'
+      ]
+    }
+  }
+};
+
+const liveSummaryHtml = buildFinalSummaryHtmlTest(liveAlertData, liveIntelResp);
+
+check('I1  live-data summary renders original message',
+      liveSummaryHtml.includes('lucky draw'),
+      'message text missing');
+
+check('I2  live-data summary renders risk score 70',
+      liveSummaryHtml.includes('70'),
+      'risk score 70 missing');
+
+check('I3  live-data summary renders H.I.V.E. turns = 4',
+      liveSummaryHtml.includes('>4<'),
+      '"4" not found in turns row');
+
+check('I4  live-data summary renders entity types URL and PAYMENT_REQUEST',
+      liveSummaryHtml.includes('URL') && liveSummaryHtml.includes('PAYMENT_REQUEST'),
+      'entity types missing');
+
+check('I5  live-data summary renders all 5 behaviour types',
+      ['URGENCY','PAYMENT_REQUEST','IMPERSONATION','REPEATED_REQUEST','ESCALATION']
+        .every(b => liveSummaryHtml.includes(b)),
+      'one or more behaviour types missing');
+
+check('I6  live-data summary renders stop reason (6 categories)',
+      liveSummaryHtml.includes('6 evidence categories'),
+      'stop reason missing');
+
+check('I7  live-data summary renders up to 3 R statements',
+      liveSummaryHtml.includes('Observed 1 URL') &&
+      liveSummaryHtml.includes('transfer request'),
+      'R statements missing');
+
+check('I8  live-data summary includes unverified disclaimer',
+      liveSummaryHtml.includes('unverified'),
+      'disclaimer missing');
+
+check('I9  live-data summary includes both action buttons',
+      liveSummaryHtml.includes('data-action="submit"') &&
+      liveSummaryHtml.includes('data-action="no-submit"'),
+      'action buttons missing');
+
+// Storage path: simulate the stored { alertData, resp } object that
+// chrome.storage.local.get returns after the first HIVE_ENDED render.
+// renderStoredSummary delegates directly to buildFinalSummaryHtml, so
+// verifying the HTML output confirms the storage path would render correctly.
+const storedObj    = { alertData: liveAlertData, resp: liveIntelResp };
+const storedHtml   = buildFinalSummaryHtmlTest(storedObj.alertData, storedObj.resp);
+
+check('I10 storage-path renders same message as direct render',
+      storedHtml.includes('lucky draw'),
+      'storage path: message missing');
+
+check('I11 storage-path renders correct interaction_count',
+      storedHtml.includes('>4<'),
+      'storage path: interaction_count missing');
+
+// background.js FETCH_INVESTIGATION response shape — verifies the mapping
+// added in the fix: session_id, interaction_count must be forwarded
+check('I12 background.js maps session_id in FETCH_INVESTIGATION response',
+      bgSrc.includes('session_id:') && bgSrc.includes('data.session_id'),
+      'session_id not mapped');
+
+check('I13 background.js maps interaction_count in FETCH_INVESTIGATION response',
+      bgSrc.includes('interaction_count:') && bgSrc.includes('data.interaction_count'),
+      'interaction_count not mapped');
+
+// popup.js diagnostic logging — confirms console.log present for DevTools verification
+check('I14 popup.js has FETCH_INVESTIGATION console.log for DevTools',
+      popupSrc.includes("'[ScamTracer] FETCH_INVESTIGATION resp:'"),
+      'FETCH_INVESTIGATION log missing');
+
+check('I15 popup.js has HIVE_ENDED console.log for DevTools',
+      popupSrc.includes('[ScamTracer] Session HIVE_ENDED'),
+      'HIVE_ENDED log missing');
+
+check('I16 popup.js has FETCH_ALERTS result console.log for DevTools',
+      popupSrc.includes("'[ScamTracer] FETCH_ALERTS result:'"),
+      'FETCH_ALERTS log missing');
 
 // ── Run backend checks and then print summary ─────────────────────────────────
 

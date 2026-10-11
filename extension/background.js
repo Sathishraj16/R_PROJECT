@@ -5,9 +5,10 @@
 // origins from an https:// page without routing through the service worker.
 //
 // Message types received:
-//   FETCH_ALERTS   → GET  /alerts
-//   FETCH_STATUS   → GET  /whatsapp/status
-//   POST_DECISION  → POST /alerts/:alertId/decision  { action }
+//   FETCH_ALERTS        → GET  /alerts
+//   FETCH_STATUS        → GET  /whatsapp/status
+//   POST_DECISION       → POST /alerts/:alertId/decision  { action }
+//   FETCH_INVESTIGATION → GET  /hive/intelligence/:session_id
 //
 // All responses are returned as { ok: true, ... } or { ok: false, error: "..." }.
 
@@ -59,6 +60,29 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         }
       })
       .catch(err => sendResponse({ ok: false, error: err.message, data: null }));
+    return true;
+  }
+
+  if (message.type === 'FETCH_INVESTIGATION') {
+    const { sessionId } = message;
+    if (!sessionId) {
+      sendResponse({ ok: false, error: 'sessionId is required.', intelligence: null });
+      return false;
+    }
+    fetch(`${NODE_URL}/hive/intelligence/${encodeURIComponent(sessionId)}`)
+      .then(r => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        return r.json();
+      })
+      .then(data => sendResponse({
+        ok:               true,
+        session_id:       data.session_id                  || null,
+        intelligence:     data.intelligence                || null,
+        state:            data.state                       || null,
+        stop_reason:      data.stop_reason                 || null,
+        interaction_count: data.interaction_count != null   ? data.interaction_count : null
+      }))
+      .catch(err => sendResponse({ ok: false, error: err.message, intelligence: null }));
     return true;
   }
 

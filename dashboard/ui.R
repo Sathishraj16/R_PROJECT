@@ -305,6 +305,14 @@ ui <- navbarPage(
     title = "Investigation Summary",
     div(style = "padding: 20px;",
       fluidRow(
+        column(12,
+          div(class = "section-card",
+            div(class = "section-title", "Session"),
+            uiOutput("session_selector_ui")
+          )
+        )
+      ),
+      fluidRow(
         column(8,
           div(class = "section-card",
             div(class = "section-title", "Factual Statements"),
@@ -329,6 +337,11 @@ ui <- navbarPage(
             div(class = "section-title", "System Information"),
             uiOutput("system_info_table")
           )
+        )
+      ),
+      fluidRow(
+        column(12,
+          uiOutput("report_decision_panel")
         )
       ),
       fluidRow(

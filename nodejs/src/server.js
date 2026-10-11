@@ -36,12 +36,14 @@
 
 const express = require('express');
 const { analyzeMessage, checkRHealth, investigateConversation, R_API_URL } = require('./rApiClient');
-const { createSession, applyDecision, addInteraction, endHiveSession, STATES, VALID_ACTIONS } = require('./sessionStore');
+const { createSession, getSession, applyDecision, addInteraction, endHiveSession, STATES, VALID_ACTIONS } = require('./sessionStore');
 const { generateResponse } = require('./hiveEngine');
-const { createAlert, getAlert, getAllAlerts, updateAlert, recordAnalysed, resetAlerts, getStats, ALERT_STATES } = require('./alertStore');
+const { createAlert, getAlert, getAllAlerts, updateAlert, recordAnalysed, resetAlerts, getStats, getHiveActiveAlertBySender, getAlertBySessionId, ALERT_STATES } = require('./alertStore');
 const { WhatsAppMonitor } = require('./whatsappClient');
 const { validateRiskResult }  = require('./riskResultValidator');
 const { formatAnalysisLog }   = require('./analysisLogger');
+const fs   = require('fs');
+const path = require('path');
 
 const app = express();
 app.use(express.json());
@@ -400,6 +402,7 @@ app.post('/hive/end', (req, res) => {
 
   const session = result.session;
   console.log(`[hive/end] Session ${session_id} ended — ${session.interaction_count} interaction(s) recorded.`);
+  saveCompletedInvestigation(session);
 
   res.json({
     session_id,
@@ -407,6 +410,23 @@ app.post('/hive/end', (req, res) => {
     conversation_length: session.interaction_count,
     hive_started_at:     session.hive_started_at,
     hive_ended_at:       session.hive_ended_at
+  });
+});
+
+// ── GET /hive/intelligence/:session_id ──────────────────────────────────────
+// Returns the latest cached intelligence for a H.I.V.E. session.
+// Updated automatically after each auto-reply turn.
+app.get('/hive/intelligence/:session_id', (req, res) => {
+  const session = getSession(req.params.session_id);
+  if (!session) {
+    return res.status(404).json({ error: true, code: 'SESSION_NOT_FOUND', message: 'Session not found.' });
+  }
+  res.json({
+    session_id:        session.session_id,
+    state:             session.state,
+    interaction_count: session.interaction_count,
+    intelligence:      session.intelligence || null,
+    stop_reason:       session.stop_reason  || null
   });
 });
 
@@ -505,6 +525,26 @@ async function processIncomingWhatsAppMessage({ id, from, body, timestamp }) {
   // Guard: only store primitive string IDs — never a complex WhatsApp object.
   const normalizedId = typeof id === 'string' ? id : null;
 
+  // ── Boundary log ─────────────────────────────────────────────────────────────
+  // Emitted for every text message that reaches analysis. Logs sender and whether
+  // a stable message ID was extracted (affects deduplication quality).
+  console.log(`${logPrefix} message received (id=${normalizedId ? 'present' : 'null'})`);
+
+  // ── H.I.V.E. routing ────────────────────────────────────────────────────────
+  // If this sender has an existing HIVE_ACTIVE alert the user explicitly created,
+  // route the message to the H.I.V.E. engine instead of running R analysis again.
+  // SAFETY: getHiveActiveAlertBySender only returns alerts in HIVE_ACTIVE status,
+  //         which requires a prior explicit POST /alerts/:id/decision ACTIVATE_HIVE.
+  const activeHiveAlert = getHiveActiveAlertBySender(from);
+  if (activeHiveAlert) {
+    console.log(`${logPrefix} → H.I.V.E. session=${activeHiveAlert.session_id} (routing to engagement engine)`);
+    await processHiveMessage({
+      from, body, normalizedId, sessionId: activeHiveAlert.session_id
+    });
+    return null; // no new alert created; H.I.V.E. handled the message
+  }
+  console.log(`${logPrefix} → R analysis (no active H.I.V.E. session for this sender)`);
+
   let riskResult;
   try {
     riskResult = await analyzeMessage(body);
@@ -544,6 +584,182 @@ async function processIncomingWhatsAppMessage({ id, from, body, timestamp }) {
 
   console.log(`${logPrefix} ALERT created: alert_id=${alert.alert_id} session_id=${session.session_id}`);
   return alert;
+}
+
+// ── H.I.V.E. auto-reply infrastructure ──────────────────────────────────────
+//
+// Used by processIncomingWhatsAppMessage when the incoming sender already has a
+// HIVE_ACTIVE alert (i.e. the user has previously clicked ACTIVATE H.I.V.E.).
+//
+// Design:
+//   _hiveSeenIds  — tracks message IDs already processed in H.I.V.E. context to
+//                   prevent duplicate replies when the same message fires twice.
+//   _hiveQueues   — per-session Promise chain; ensures replies are generated and
+//                   sent ONE AT A TIME per session, even if two messages arrive
+//                   concurrently.
+//
+// SAFETY RULES (enforced in _executeHiveTurn):
+//   1. Session state is rechecked to HIVE_ACTIVE immediately before any action.
+//   2. Own messages (fromMe) never reach here — filtered in whatsappClient.js.
+//   3. Non-text / empty messages never reach here — filtered in whatsappClient.js.
+//   4. Failed sends are caught, logged, and annotated — never retried in a loop.
+//   5. H.I.V.E. responses never include OTPs, passwords, or sensitive credentials
+//      (enforced by hiveEngine.js template design).
+
+// ── Completed investigation persistence ──────────────────────────────────────
+// Writes a JSON snapshot to data/completed_sessions/{session_id}.json whenever
+// a H.I.V.E. session reaches HIVE_ENDED. Overwrites an existing file for the
+// same session (repeated saves are safe). Non-fatal — a write failure is logged
+// but does not affect session state or the HTTP response.
+const COMPLETED_DIR = path.join(__dirname, '..', '..', 'data', 'completed_sessions');
+
+function saveCompletedInvestigation(session) {
+  try {
+    const alert = getAlertBySessionId(session.session_id);
+    const snapshot = {
+      session_id:          session.session_id,
+      completed_at:        session.hive_ended_at || new Date().toISOString(),
+      sender:              alert ? alert.sender             : 'unknown',
+      initial_message:     alert ? alert.message            : (session.message || ''),
+      risk_score:          alert ? alert.risk_score         : null,
+      risk_level:          alert ? alert.risk_level         : null,
+      prediction:          alert ? alert.prediction         : null,
+      model_probability:   alert ? alert.model_probability  : null,
+      ml_score:            alert ? alert.ml_score           : null,
+      indicator_score:     alert ? alert.indicator_score    : null,
+      detected_indicators: alert ? alert.detected_indicators : [],
+      explanations:        alert ? alert.explanations        : [],
+      interaction_count:   session.interaction_count,
+      stop_reason:         session.stop_reason || null,
+      conversation:        session.conversation || [],
+      intelligence:        session.intelligence || null
+    };
+
+    fs.mkdirSync(COMPLETED_DIR, { recursive: true });
+    const filePath = path.join(COMPLETED_DIR, `${session.session_id}.json`);
+    fs.writeFileSync(filePath, JSON.stringify(snapshot, null, 2), 'utf8');
+    console.log(`[hive] Completed investigation saved: ${filePath}`);
+  } catch (err) {
+    console.error(`[hive] Failed to save completed investigation for ${session.session_id}: ${err.message}`);
+  }
+}
+
+const _hiveSeenIds = new Set(); // dedup for H.I.V.E. messages (separate from alertStore)
+const _hiveQueues  = new Map(); // sessionId → tail Promise (ensures sequential processing)
+
+/**
+ * Count the number of distinct evidence categories in an R intelligence result.
+ * Entity types (PHONE, UPI_ID, URL, …) and behaviour types (URGENCY, THREAT, …)
+ * each count as a separate category. A Set ensures no double-counting.
+ */
+function countEvidenceCategories(intelResult) {
+  const cats = new Set();
+  const s = intelResult && intelResult.summary;
+  if (s) {
+    if (Array.isArray(s.entity_types))    s.entity_types.forEach(t => cats.add(t));
+    if (Array.isArray(s.behaviour_types)) s.behaviour_types.forEach(t => cats.add(t));
+  }
+  return cats.size;
+}
+
+/**
+ * Route an incoming WhatsApp message to its active H.I.V.E. session.
+ * Deduplicates by message ID, then chains onto the session's processing queue.
+ */
+async function processHiveMessage({ from, body, normalizedId, sessionId }) {
+  const logPrefix = `[hive:auto] session=${sessionId} from=${from}`;
+
+  console.log(`${logPrefix} H.I.V.E. turn received (id=${normalizedId || 'null'})`);
+
+  // Dedup: skip if this exact message ID was already processed in H.I.V.E.
+  if (normalizedId && _hiveSeenIds.has(normalizedId)) {
+    console.log(`${logPrefix} Duplicate message ID — skipped.`);
+    return;
+  }
+  if (normalizedId) _hiveSeenIds.add(normalizedId);
+
+  // Chain onto the session queue — sequential processing, one turn at a time.
+  const prev   = _hiveQueues.get(sessionId) || Promise.resolve();
+  const thisTurn = prev.then(() => _executeHiveTurn({ from, body, sessionId, logPrefix }));
+  // Store a non-rejecting tail so the chain survives errors in individual turns.
+  _hiveQueues.set(sessionId, thisTurn.catch(() => {}));
+  await thisTurn;
+}
+
+/**
+ * Execute one H.I.V.E. engagement turn:
+ *   1. Re-verify the session is still HIVE_ACTIVE.
+ *   2. Generate a deterministic reply via the existing H.I.V.E. engine.
+ *   3. Attempt to send via the WhatsApp client.
+ *   4. Record the turn in the session conversation regardless of send outcome.
+ *   5. Annotate send_result ('ok' or 'failed: <reason>') on the OUTGOING record.
+ */
+async function _executeHiveTurn({ from, body, sessionId, logPrefix }) {
+  // Re-check session state before generating or sending anything.
+  const session = getSession(sessionId);
+  if (!session || session.state !== STATES.HIVE_ACTIVE) {
+    const state = session ? session.state : 'not found';
+    console.log(`${logPrefix} Session no longer active (state: ${state}) — no reply sent.`);
+    return;
+  }
+
+  // Generate the H.I.V.E. reply using the existing deterministic engine.
+  const { strategy, response } = generateResponse(body, session.interaction_count);
+  console.log(`${logPrefix} strategy=${strategy} turn=${session.interaction_count + 1}`);
+
+  // Attempt to send. Failure is caught, logged, and recorded — never triggers a retry.
+  let sendResult = 'ok';
+  try {
+    console.log(`${logPrefix} Sending reply (client_ready=${whatsappMonitor.isReady})`);
+    await whatsappMonitor.sendMessage(from, response);
+    console.log(`${logPrefix} Reply sent.`);
+  } catch (err) {
+    sendResult = `failed: ${err.message}`;
+    console.error(`${logPrefix} Send failed — reply not delivered:`, err.message);
+  }
+
+  // Record the interaction (addInteraction re-checks HIVE_ACTIVE — safe if session ended
+  // between the state check above and this call).
+  const interactionResult = addInteraction(sessionId, body, response, strategy);
+  if (!interactionResult.ok) {
+    console.warn(`${logPrefix} addInteraction rejected — ${interactionResult.code}: ${interactionResult.message}`);
+    return;
+  }
+
+  // Annotate send outcome on the OUTGOING conversation record.
+  const convo    = interactionResult.session.conversation;
+  const outgoing = convo[convo.length - 1];
+  if (outgoing && outgoing.direction === 'OUTGOING') {
+    outgoing.send_result = sendResult;
+  }
+
+  // Update the intelligence summary and check the auto-stop condition.
+  // Non-fatal: if R is unavailable, the session continues unaffected.
+  const liveSession = interactionResult.session;
+  try {
+    if (liveSession.state === STATES.HIVE_ACTIVE) {
+      const convoForR = liveSession.conversation.map((msg, idx) => ({
+        direction: msg.direction,
+        text:      msg.text,
+        turn:      Math.floor(idx / 2) + 1,
+        timestamp: msg.timestamp
+      }));
+      const intelResult = await investigateConversation(sessionId, convoForR);
+      liveSession.intelligence = intelResult;
+      const cats = countEvidenceCategories(intelResult);
+      console.log(`${logPrefix} intelligence updated — ${cats} evidence category/ies, ${liveSession.interaction_count} turn(s)`);
+      if (cats >= 5 && liveSession.interaction_count >= 4) {
+        const endResult = endHiveSession(sessionId);
+        if (endResult.ok) {
+          endResult.session.stop_reason = `auto: ${cats} evidence categories across ${liveSession.interaction_count} turns`;
+          console.log(`${logPrefix} Auto-stopped — ${cats} categories, ${liveSession.interaction_count} turns.`);
+          saveCompletedInvestigation(endResult.session);
+        }
+      }
+    }
+  } catch (err) {
+    console.warn(`${logPrefix} Intelligence update skipped (R unavailable): ${err.message}`);
+  }
 }
 
 // ── GET /whatsapp/status ─────────────────────────────────────────────────────
@@ -654,8 +870,10 @@ if (TEST_MODE) {
   // Never available in production (TEST_MODE=false).
   app.post('/test/reset-alerts', (req, res) => {
     resetAlerts();
-    console.log('[test/reset-alerts] Alert store cleared.');
-    res.json({ ok: true, message: 'Alert store reset — all alerts and running totals cleared.' });
+    _hiveSeenIds.clear();
+    _hiveQueues.clear();
+    console.log('[test/reset-alerts] Alert store and H.I.V.E. dedup/queue state cleared.');
+    res.json({ ok: true, message: 'Alert store and H.I.V.E. state reset — all alerts, running totals, and H.I.V.E. dedup cleared.' });
   });
 
   app.post('/test/simulate-whatsapp', async (req, res) => {
@@ -688,6 +906,17 @@ if (TEST_MODE) {
     } catch (err) {
       return handleRError(err, res, '[test/simulate-whatsapp]');
     }
+  });
+
+  // Expose session state for test verification — allows tests to inspect
+  // conversation history, send_result fields, and interaction counts without
+  // coupling to internal module internals.
+  app.get('/test/session/:id', (req, res) => {
+    const session = getSession(req.params.id);
+    if (!session) {
+      return res.status(404).json({ error: true, code: 'NOT_FOUND', message: 'Session not found.' });
+    }
+    res.json({ ok: true, session });
   });
 }
 

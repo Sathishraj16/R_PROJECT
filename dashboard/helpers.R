@@ -403,3 +403,91 @@ post_decision <- function(alert_id, action, node_url = "http://localhost:3000") 
     parsed
   }, error = function(e) list(error = TRUE, message = conditionMessage(e)))
 }
+
+# ── Completed investigation file helpers ──────────────────────────────────────
+
+#' Return a named character vector: session_id → display label.
+#' Reads filenames from data/completed_sessions/.
+#' Returns an empty named character vector if no files exist.
+load_live_investigations <- function(dir = "data/completed_sessions") {
+  if (!dir.exists(dir)) return(setNames(character(0), character(0)))
+  files <- list.files(dir, pattern = "\\.json$", full.names = FALSE)
+  if (length(files) == 0L) return(setNames(character(0), character(0)))
+  ids    <- sub("\\.json$", "", files)
+  labels <- paste0("Live session: ", substr(ids, 1L, 8L), "…")
+  setNames(ids, labels)
+}
+
+#' Load a completed investigation JSON file and map it to the same
+#' list structure returned by load_demo_data() so existing render functions
+#' work unchanged.
+#'
+#' @param session_id  Character. The session UUID.
+#' @param dir         Directory containing JSON snapshots.
+#' @return Named list with: scenario, initial_msg, risk, conversation, investigation
+#' @throws If the file does not exist or cannot be parsed.
+load_completed_investigation <- function(session_id,
+                                         dir = "data/completed_sessions") {
+  file_path <- file.path(dir, paste0(session_id, ".json"))
+  if (!file.exists(file_path))
+    stop("[load_completed_investigation] File not found: ", file_path)
+
+  raw <- tryCatch(
+    fromJSON(file_path, simplifyVector = FALSE),
+    error = function(e)
+      stop("[load_completed_investigation] JSON parse error: ", conditionMessage(e))
+  )
+
+  # ── Map risk fields (from alert snapshot) ──
+  risk <- list(
+    prediction          = raw$prediction          %||% "UNKNOWN",
+    model_probability   = raw$model_probability   %||% NA_real_,
+    ml_score            = raw$ml_score            %||% NA_real_,
+    indicator_score     = raw$indicator_score     %||% NA_integer_,
+    risk_score          = raw$risk_score          %||% NA_real_,
+    risk_level          = raw$risk_level          %||% "UNKNOWN",
+    detected_indicators = raw$detected_indicators %||% list(),
+    explanations        = raw$explanations        %||% list(),
+    summary_text        = "",
+    model_used          = NA_character_,
+    caveat              = "Live investigation — original risk assessment from R."
+  )
+
+  # ── Map intelligence (from session.intelligence R result) ──
+  intel_raw <- raw$intelligence %||% list()
+  investigation <- list(
+    session_id   = raw$session_id,
+    intelligence = intel_raw$intelligence %||% list(),
+    behaviour    = intel_raw$behaviour    %||% list(),
+    summary      = list(
+      n_turns_analysed           = intel_raw$summary$n_turns_analysed           %||% 0L,
+      n_entities                 = intel_raw$summary$n_entities                 %||% 0L,
+      entity_types               = intel_raw$summary$entity_types               %||% list(),
+      n_behaviours               = intel_raw$summary$n_behaviours               %||% 0L,
+      behaviour_types            = intel_raw$summary$behaviour_types            %||% list(),
+      n_suspicious_request_types = intel_raw$summary$n_suspicious_request_types %||% 0L,
+      repeated_requests          = isTRUE(intel_raw$summary$repeated_requests),
+      escalation_detected        = isTRUE(intel_raw$summary$escalation_detected),
+      statements                 = intel_raw$summary$statements                 %||% list()
+    )
+  )
+
+  list(
+    scenario = list(
+      scenario_name = paste0("Live session (", substr(raw$session_id, 1L, 8L), "…)")
+    ),
+    initial_msg   = raw$initial_message %||% "",
+    risk          = risk,
+    conversation  = raw$conversation    %||% list(),
+    investigation = investigation,
+    # Extra live-only fields used by Tab 6 report panel
+    session_id    = raw$session_id,
+    sender        = raw$sender          %||% "unknown",
+    interaction_count = raw$interaction_count %||% 0L,
+    stop_reason   = raw$stop_reason     %||% NULL,
+    completed_at  = raw$completed_at    %||% NULL
+  )
+}
+
+# NULL-coalescing operator (R does not have one built-in)
+`%||%` <- function(x, y) if (!is.null(x)) x else y

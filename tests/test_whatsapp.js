@@ -230,12 +230,12 @@ const msgWithSerialized = { id: { _serialized: 'false_12345@c.us_ABCDEF', fromMe
 const normD1 = normalizeWhatsAppMessage(msgWithSerialized);
 check('D1  msg.id._serialized extracted as string', normD1.id === 'false_12345@c.us_ABCDEF');
 
-// D2: full msg.id object NOT stored when _serialized is missing → null
+// D2: msg.id without _serialized but with remote+id strings — fallback constructs ID
+// (previously returned null; now the LID fallback reconstructs it to enable dedup)
 const msgNoSerialized = { id: { fromMe: false, remote: '12345@c.us', id: 'ABCDEF' }, from: '12345@c.us', body: 'hello', timestamp: 1700000000 };
 const normD2 = normalizeWhatsAppMessage(msgNoSerialized);
-// typeof null === 'object' in JS (historical quirk) — use strict equality only
-check('D2  msg.id with no _serialized → id is null (not the object)',
-      normD2.id === null);
+check('D2  msg.id without _serialized but with remote+id → fallback constructs string ID',
+      typeof normD2.id === 'string' && normD2.id.includes('12345@c.us') && normD2.id.includes('ABCDEF'));
 
 // D3: msg.from extracted correctly
 check('D3  msg.from extracted as string', normD1.from === '12345@c.us');
@@ -298,6 +298,135 @@ check('D14 validateRiskResult accepts risk_score=60 (at threshold)',
 // D15: rejects NaN and Infinity in risk_score
 check('D15 validateRiskResult rejects NaN risk_score',
       validateRiskResult({ ...validResult, risk_score: NaN }, 'test msg').valid === false);
+
+// ── Case D2: normalizeWhatsAppMessage LID fallback ────────────────────────────
+// Regression for: @lid messages returning null message ID when _serialized
+// is absent from msg.id, disabling deduplication silently.
+
+console.log('\n── Case D2: normalizeWhatsAppMessage LID ID fallback ──');
+
+// D2a: @lid message where _serialized is present (standard path — unchanged)
+const lidMsgStd = {
+  id: { _serialized: 'false_53871909019871@lid_AABBCCDD', fromMe: false,
+        remote: '53871909019871@lid', id: 'AABBCCDD' },
+  from: '53871909019871@lid', body: 'test', timestamp: 1700000000
+};
+const normD2a = normalizeWhatsAppMessage(lidMsgStd);
+check('D2a @lid msg with _serialized: ID extracted correctly',
+      normD2a.id === 'false_53871909019871@lid_AABBCCDD');
+
+// D2b: @lid message where _serialized is absent — fallback constructs it
+const lidMsgNoSerial = {
+  id: { fromMe: false, remote: '53871909019871@lid', id: 'AABBCCDD' },
+  from: '53871909019871@lid', body: 'test', timestamp: 1700000000
+};
+const normD2b = normalizeWhatsAppMessage(lidMsgNoSerial);
+check('D2b @lid msg without _serialized: fallback reconstructs ID string',
+      typeof normD2b.id === 'string' && normD2b.id.includes('53871909019871@lid') &&
+      normD2b.id.includes('AABBCCDD'),
+      normD2b.id);
+
+// D2c: @lid message where remote is a WID object (not a plain string)
+const lidMsgWidRemote = {
+  id: { fromMe: false, remote: { _serialized: '53871909019871@lid' }, id: 'XXYYZZ' },
+  from: '53871909019871@lid', body: 'test', timestamp: 1700000000
+};
+const normD2c = normalizeWhatsAppMessage(lidMsgWidRemote);
+check('D2c @lid msg with WID remote object: fallback extracts remote._serialized',
+      typeof normD2c.id === 'string' && normD2c.id.includes('53871909019871@lid'),
+      normD2c.id);
+
+// D2d: completely missing id — stays null, does not throw
+const lidMsgNoId = { from: '53871909019871@lid', body: 'test', timestamp: 1700000000 };
+const normD2d = normalizeWhatsAppMessage(lidMsgNoId);
+check('D2d message with no id field: normalizer returns null gracefully',
+      normD2d.id === null);
+
+// D2e: two @lid messages with different hashes get different IDs (dedup works)
+const normHash1 = normalizeWhatsAppMessage({
+  id: { fromMe: false, remote: '53871909019871@lid', id: 'HASH001' }, from: 'x', body: 'a', timestamp: 0
+});
+const normHash2 = normalizeWhatsAppMessage({
+  id: { fromMe: false, remote: '53871909019871@lid', id: 'HASH002' }, from: 'x', body: 'a', timestamp: 0
+});
+check('D2e two @lid messages with different hashes produce different IDs',
+      normHash1.id !== normHash2.id &&
+      normHash1.id !== null && normHash2.id !== null);
+
+// ── Case F: H.I.V.E. auto-reply unit tests ───────────────────────────────────
+// F1–F7 require no server — pure in-process checks against alertStore and
+// WhatsAppMonitor. F8–F17 are integration tests (RUN_INTEGRATION=true).
+
+console.log('\n── Case F (unit): H.I.V.E. auto-reply ──');
+
+// F1: getHiveActiveAlertBySender exported from alertStore
+check('F1  getHiveActiveAlertBySender is exported from alertStore',
+      typeof alertStore.getHiveActiveAlertBySender === 'function');
+
+// F2: returns null for null sender
+check('F2  getHiveActiveAlertBySender returns null for null sender',
+      alertStore.getHiveActiveAlertBySender(null) === null);
+
+// F3: returns null for unknown sender
+check('F3  getHiveActiveAlertBySender returns null for unknown sender',
+      alertStore.getHiveActiveAlertBySender('nobody@c.us') === null);
+
+// F4: returns null for sender whose alert is BLOCKED (not HIVE_ACTIVE)
+{
+  const fBlockedAlert = alertStore.createAlert({
+    whatsappMsgId: 'f-unit-blocked',
+    sender:        'f-unit-blocked@c.us',
+    messageText:   'Test message for F4',
+    riskResult: { risk_score: 85, risk_level: 'HIGH', prediction: 'SCAM',
+                  model_probability: 0.9, ml_score: 50, indicator_score: 35,
+                  detected_indicators: ['URGENCY'], explanations: [] },
+    sessionId:     'f-unit-sess-blocked'
+  });
+  if (fBlockedAlert) {
+    alertStore.updateAlert(fBlockedAlert.alert_id,
+      { status: ALERT_STATES.BLOCKED, decision: 'BLOCK_AND_PROTECT' });
+  }
+  check('F4  getHiveActiveAlertBySender returns null for BLOCKED sender',
+        alertStore.getHiveActiveAlertBySender('f-unit-blocked@c.us') === null);
+}
+
+// F5: returns HIVE_ACTIVE alert for matching sender
+{
+  const fHiveAlert = alertStore.createAlert({
+    whatsappMsgId: 'f-unit-hive',
+    sender:        'f-unit-hive@c.us',
+    messageText:   'Test message for F5',
+    riskResult: { risk_score: 90, risk_level: 'HIGH', prediction: 'SCAM',
+                  model_probability: 0.92, ml_score: 55, indicator_score: 35,
+                  detected_indicators: ['URGENCY'], explanations: [] },
+    sessionId:     'f-unit-sess-hive'
+  });
+  if (fHiveAlert) {
+    alertStore.updateAlert(fHiveAlert.alert_id,
+      { status: ALERT_STATES.HIVE_ACTIVE, decision: 'ACTIVATE_HIVE' });
+  }
+  const foundF5 = alertStore.getHiveActiveAlertBySender('f-unit-hive@c.us');
+  check('F5  getHiveActiveAlertBySender returns HIVE_ACTIVE alert for matching sender',
+        !!foundF5 && foundF5.status === ALERT_STATES.HIVE_ACTIVE);
+}
+
+// F6: WhatsAppMonitor.prototype.sendMessage exists
+check('F6  WhatsAppMonitor.prototype.sendMessage is a function',
+      typeof WhatsAppMonitor.prototype.sendMessage === 'function');
+
+// F7: sendMessage rejects when client is not initialised (async — result lands in summary)
+{
+  process.env.WHATSAPP_ENABLED = 'false';
+  const monitorF7 = new WhatsAppMonitor(null);
+  monitorF7.sendMessage('test@c.us', 'hello')
+    .then(() => {
+      check('F7  sendMessage rejects when client is not initialised', false, 'expected rejection');
+    })
+    .catch((e) => {
+      check('F7  sendMessage rejects when client is not initialised',
+            e.message.includes('not initialised'), e.message);
+    });
+}
 
 // ── Integration tests: server endpoints ──────────────────────────────────────
 // These require the Node.js server to be running on port 3001 with
@@ -553,9 +682,10 @@ async function runPhase12IntegrationTests() {
         `got ${resetRes.status}`);
 
   // E12 + E13: simulate a new scam message; verify alert fields
+  // Confirmed risk_score=93 (HIGH) on the production R model — same body as C18 dedup test.
   const simE = await post(`${BASE_URL}/test/simulate-whatsapp`, {
     from: '91etest@c.us',
-    body: 'URGENT! Your bank account is about to be suspended. Send your OTP to verify immediately.',
+    body: 'Your debit card has been blocked. Share your 16-digit card number, CVV and OTP with our executive at 08001234567.',
     id:   'e-test-001'
   });
   const alertE = simE.body && simE.body.alert;
@@ -599,15 +729,534 @@ async function runPhase12IntegrationTests() {
   }
 }
 
+// ── Case F: H.I.V.E. auto-reply integration tests ────────────────────────────
+// F8–F17: require Node.js on port 3001 with SCAMTRACER_TEST_MODE=true,
+// WHATSAPP_ENABLED=false, and R on port 8000.
+// Because WHATSAPP_ENABLED=false, sendMessage will throw (client not ready),
+// so send_result will be 'failed: ...' — tests check for field presence,
+// not a specific 'ok' value.
+
+async function runHiveAutoReplyIntegrationTests() {
+  console.log('\n── Case F (integration): H.I.V.E. auto-reply ──');
+
+  if (!RUN_INTEGRATION) {
+    [
+      'F8  Scam message creates USER_DECISION_REQUIRED alert',
+      'F9  ACTIVATE_HIVE transitions alert to HIVE_ACTIVE',
+      'F10 Next message from HIVE_ACTIVE sender is routed to H.I.V.E. (no new alert)',
+      'F11 Session conversation has INCOMING and OUTGOING records',
+      'F12 OUTGOING conversation record has send_result field',
+      'F13 Duplicate message ID does not increase interaction count',
+      'F14 Second genuine H.I.V.E. message increases interaction count',
+      'F15 POST /hive/end transitions session to HIVE_ENDED',
+      'F16 Message after /hive/end is silently dropped (no new alert)',
+      'F17 Session conversation is preserved after H.I.V.E. ends'
+    ].forEach(t => console.log(`  [SKIP] ${t}`));
+    return;
+  }
+
+  // Reset to a clean state
+  await post(`${BASE_URL}/test/reset-alerts`, {});
+
+  const fSender = '91fhive@c.us';
+
+  // F8: First scam message — creates USER_DECISION_REQUIRED alert
+  const simF8 = await post(`${BASE_URL}/test/simulate-whatsapp`, {
+    from: fSender,
+    body: 'URGENT: Your account has been suspended. Visit http://securebank-verify.com/login to restore access or lose your funds permanently.',
+    id:   'f-int-msg-001'
+  });
+  const alertF8 = simF8.body && simF8.body.alert;
+  check('F8  Scam message creates USER_DECISION_REQUIRED alert',
+        !!alertF8 && alertF8.status === 'USER_DECISION_REQUIRED',
+        JSON.stringify(simF8.body));
+
+  if (!alertF8) {
+    ['F9','F10','F11','F12','F13','F14','F15','F16','F17'].forEach(t =>
+      console.log(`  [SKIP] ${t} — skipped: F8 alert not created`)
+    );
+    return;
+  }
+
+  // F9: ACTIVATE_HIVE
+  const decF9 = await post(`${BASE_URL}/alerts/${alertF8.alert_id}/decision`, {
+    action: 'ACTIVATE_HIVE'
+  });
+  const sessionId = decF9.body && decF9.body.session_id;
+  check('F9  ACTIVATE_HIVE transitions alert to HIVE_ACTIVE',
+        decF9.body && decF9.body.status === 'HIVE_ACTIVE' && !!sessionId,
+        JSON.stringify(decF9.body));
+
+  if (!sessionId) {
+    ['F10','F11','F12','F13','F14','F15','F16','F17'].forEach(t =>
+      console.log(`  [SKIP] ${t} — skipped: ACTIVATE_HIVE failed`)
+    );
+    return;
+  }
+
+  // F10: Next message from same sender is routed to H.I.V.E., NOT a new alert
+  // processIncomingWhatsAppMessage awaits processHiveMessage before returning,
+  // so by the time simulate-whatsapp responds the H.I.V.E. turn is complete.
+  const simF10 = await post(`${BASE_URL}/test/simulate-whatsapp`, {
+    from: fSender,
+    body: 'Can you provide your OTP?',
+    id:   'f-int-msg-002'
+  });
+  check('F10 Next message from HIVE_ACTIVE sender is routed to H.I.V.E. (no new alert)',
+        simF10.body && simF10.body.alert_created === false,
+        JSON.stringify(simF10.body));
+
+  // F11: Session conversation has at least one INCOMING + one OUTGOING entry
+  const sessF11 = await get(`${BASE_URL}/test/session/${sessionId}`);
+  const conv11  = sessF11.body && sessF11.body.session && sessF11.body.session.conversation;
+  check('F11 Session conversation has INCOMING and OUTGOING records',
+        Array.isArray(conv11) && conv11.length >= 2 &&
+        conv11.some(r => r.direction === 'INCOMING') &&
+        conv11.some(r => r.direction === 'OUTGOING'),
+        `conv_len=${conv11 && conv11.length}`);
+
+  // F12: OUTGOING record has send_result field (value is 'ok' or 'failed: ...')
+  const outgoing12 = conv11 && conv11.find(r => r.direction === 'OUTGOING');
+  check('F12 OUTGOING conversation record has send_result field',
+        outgoing12 && 'send_result' in outgoing12,
+        JSON.stringify(outgoing12));
+
+  // F13: Duplicate message ID — same ID sent again; interaction_count must not change
+  const countBefore13 = sessF11.body.session.interaction_count;
+  await post(`${BASE_URL}/test/simulate-whatsapp`, {
+    from: fSender,
+    body: 'Can you provide your OTP?',
+    id:   'f-int-msg-002'    // same ID as F10
+  });
+  const sessF13    = await get(`${BASE_URL}/test/session/${sessionId}`);
+  const countAfter13 = sessF13.body && sessF13.body.session && sessF13.body.session.interaction_count;
+  check('F13 Duplicate message ID does not increase interaction count',
+        countAfter13 === countBefore13,
+        `before=${countBefore13} after=${countAfter13}`);
+
+  // F14: Second genuine H.I.V.E. message (new ID) increases interaction count
+  await post(`${BASE_URL}/test/simulate-whatsapp`, {
+    from: fSender,
+    body: 'Send me your bank details to verify.',
+    id:   'f-int-msg-003'
+  });
+  const sessF14 = await get(`${BASE_URL}/test/session/${sessionId}`);
+  const countF14 = sessF14.body && sessF14.body.session && sessF14.body.session.interaction_count;
+  check('F14 Second genuine H.I.V.E. message increases interaction count',
+        typeof countF14 === 'number' && countF14 > countBefore13,
+        `before=${countBefore13} after=${countF14}`);
+
+  // F15: POST /hive/end transitions session to HIVE_ENDED
+  const endRes = await post(`${BASE_URL}/hive/end`, { session_id: sessionId });
+  check('F15 POST /hive/end transitions session to HIVE_ENDED',
+        endRes.body && endRes.body.status === 'HIVE_ENDED',
+        JSON.stringify(endRes.body));
+
+  // F16: Message after /hive/end is silently dropped — no new alert created
+  // (alert status is still HIVE_ACTIVE in alertStore, so routing fires, but
+  //  _executeHiveTurn re-checks session state and returns early)
+  const simF16 = await post(`${BASE_URL}/test/simulate-whatsapp`, {
+    from: fSender,
+    body: 'Hello, still there?',
+    id:   'f-int-msg-004'
+  });
+  check('F16 Message after /hive/end is silently dropped (no new alert)',
+        simF16.body && simF16.body.alert_created === false,
+        JSON.stringify(simF16.body));
+
+  // F17: Session conversation and HIVE_ENDED state are preserved after end
+  const sessF17 = await get(`${BASE_URL}/test/session/${sessionId}`);
+  const convF17  = sessF17.body && sessF17.body.session && sessF17.body.session.conversation;
+  check('F17 Session conversation is preserved and state is HIVE_ENDED',
+        Array.isArray(convF17) && convF17.length >= 2 &&
+        sessF17.body.session.state === 'HIVE_ENDED',
+        `state=${sessF17.body && sessF17.body.session && sessF17.body.session.state} ` +
+        `conv_len=${convF17 && convF17.length}`);
+
+  // ── F_LID: Regression for @lid sender format routing ──────────────────────
+  // Root cause identified: production alert was created with sender='53871909019871@lid'
+  // (@lid format), but tests only used @c.us format. This regression confirms that
+  // getHiveActiveAlertBySender, the routing block, and H.I.V.E. turns all work
+  // correctly with @lid-format sender JIDs.
+  console.log('\n── Case F_LID: @lid sender routing regression ──');
+
+  await post(`${BASE_URL}/test/reset-alerts`, {});
+
+  const lidSender = '53871909019871@lid';
+
+  // Confirmed risk_score=81 (HIGH) on the production R model — same body as C6/C7.
+  const simLid = await post(`${BASE_URL}/test/simulate-whatsapp`, {
+    from: lidSender,
+    body: 'URGENT: Your account has been suspended. Visit http://securebank-verify.com/login to restore access or lose your funds permanently.',
+    id:   'lid-reg-msg-001'
+  });
+  const alertLid = simLid.body && simLid.body.alert;
+  check('F_LID1 @lid sender creates USER_DECISION_REQUIRED alert',
+        !!alertLid && alertLid.status === 'USER_DECISION_REQUIRED' &&
+        alertLid.sender === lidSender,
+        JSON.stringify(simLid.body));
+
+  if (!alertLid) {
+    ['F_LID2','F_LID3','F_LID4'].forEach(t =>
+      console.log(`  [SKIP] ${t} — skipped: F_LID1 alert not created`)
+    );
+    return;
+  }
+
+  const lidDec = await post(`${BASE_URL}/alerts/${alertLid.alert_id}/decision`, {
+    action: 'ACTIVATE_HIVE'
+  });
+  const lidSessionId = lidDec.body && lidDec.body.session_id;
+  check('F_LID2 ACTIVATE_HIVE on @lid alert returns HIVE_ACTIVE',
+        lidDec.body && lidDec.body.status === 'HIVE_ACTIVE' && !!lidSessionId,
+        JSON.stringify(lidDec.body));
+
+  if (!lidSessionId) {
+    ['F_LID3','F_LID4'].forEach(t =>
+      console.log(`  [SKIP] ${t} — skipped: ACTIVATE_HIVE failed`)
+    );
+    return;
+  }
+
+  // Follow-up message from same @lid sender must route to H.I.V.E., not R analysis
+  const simLid2 = await post(`${BASE_URL}/test/simulate-whatsapp`, {
+    from: lidSender,
+    body: 'Please send the fee immediately to claim your prize.',
+    id:   'lid-reg-msg-002'
+  });
+  check('F_LID3 Follow-up from @lid sender routes to H.I.V.E. (no new alert)',
+        simLid2.body && simLid2.body.alert_created === false,
+        JSON.stringify(simLid2.body));
+
+  // Session must have conversation entries showing the H.I.V.E. turn fired
+  const sessLid = await get(`${BASE_URL}/test/session/${lidSessionId}`);
+  const convLid = sessLid.body && sessLid.body.session && sessLid.body.session.conversation;
+  check('F_LID4 H.I.V.E. conversation recorded for @lid session',
+        Array.isArray(convLid) && convLid.length >= 2 &&
+        convLid.some(r => r.direction === 'INCOMING') &&
+        convLid.some(r => r.direction === 'OUTGOING' && 'send_result' in r),
+        `conv_len=${convLid && convLid.length}`);
+}
+
+// ── Case G (integration): Intelligence collection ─────────────────────────────
+// G1–G6 require R running on port 8000.
+//
+// Auto-stop threshold: ≥5 distinct evidence categories AND ≥4 H.I.V.E. turns.
+// Both conditions must be met simultaneously; either alone is insufficient.
+//
+// G1: session.intelligence is populated after a H.I.V.E. turn
+// G2: GET /hive/intelligence/:session_id returns intelligence data
+// G3: 4 categories + 1 turn does NOT trigger auto-stop (categories condition alone is not enough)
+// G4: stop_reason is null when the threshold has not been met
+// G5: session auto-stops when ≥5 categories AND ≥4 turns are both satisfied
+// G6: auto-stopped session has stop_reason starting with 'auto:'
+//
+// G1/G2 message: 'Please call 9876543210 and share your OTP.'
+//   → PHONE + OTP_REQUEST + OTP_SOLICITATION = 3 categories — session stays HIVE_ACTIVE
+//
+// G3/G4 message: 'Visit http://fake-secure.com/verify and call 9876543210. Please share the 6-digit OTP to proceed.'
+//   → PHONE + URL + OTP_REQUEST + OTP_SOLICITATION ≈ 4 categories, 1 turn → NOT stopped
+//
+// G5 session (sender 91gstop@c.us):
+//   Turn 1: Rich multi-category message → ≥5 categories, 1 turn → NOT stopped (turns < 4)
+//   Turns 2–3: simple messages → ≥5 categories, 2–3 turns → NOT stopped (turns < 4)
+//   Turn 4: simple message → ≥5 categories, 4 turns → STOPPED (both conditions met)
+
+async function runIntelligenceIntegrationTests() {
+  console.log('\n── Case G (integration): Intelligence collection ──');
+
+  if (!RUN_INTEGRATION) {
+    [
+      'G1  session.intelligence populated after H.I.V.E. turn',
+      'G2  GET /hive/intelligence returns intelligence data',
+      'G3  4 categories and 1 turn does NOT auto-stop session',
+      'G4  stop_reason is null when auto-stop threshold not met',
+      'G5  Session auto-stops only when ≥5 categories AND ≥4 turns (state=HIVE_ENDED)',
+      'G6  Auto-stopped session has stop_reason starting with "auto:"'
+    ].forEach(t => console.log(`  [SKIP] ${t}`));
+    return;
+  }
+
+  await post(`${BASE_URL}/test/reset-alerts`, {});
+
+  const gSender = '91gintel@c.us';
+
+  // Create a scam alert and activate H.I.V.E. (for G1/G2)
+  const simG = await post(`${BASE_URL}/test/simulate-whatsapp`, {
+    from: gSender,
+    body: 'URGENT: Your account has been suspended. Visit http://securebank-verify.com/login to restore access or lose your funds permanently.',
+    id:   'g-int-msg-001'
+  });
+  const alertG = simG.body && simG.body.alert;
+  if (!alertG) {
+    ['G1','G2','G3','G4','G5','G6'].forEach(t =>
+      console.log(`  [SKIP] ${t} — skipped: initial scam alert not created`)
+    );
+    return;
+  }
+
+  const decG = await post(`${BASE_URL}/alerts/${alertG.alert_id}/decision`, { action: 'ACTIVATE_HIVE' });
+  const gSessionId = decG.body && decG.body.session_id;
+  if (!gSessionId) {
+    ['G1','G2','G3','G4','G5','G6'].forEach(t =>
+      console.log(`  [SKIP] ${t} — skipped: ACTIVATE_HIVE failed`)
+    );
+    return;
+  }
+
+  // G1/G2: Send a message — intelligence must be populated; session must stay HIVE_ACTIVE
+  await post(`${BASE_URL}/test/simulate-whatsapp`, {
+    from: gSender,
+    body: 'Please call 9876543210 and share your OTP.',
+    id:   'g-int-msg-002'
+  });
+
+  const sessG1 = await get(`${BASE_URL}/test/session/${gSessionId}`);
+  const sessionG1 = sessG1.body && sessG1.body.session;
+  const intelG1 = sessionG1 && sessionG1.intelligence;
+  check('G1  session.intelligence populated after H.I.V.E. turn',
+        !!intelG1 && typeof intelG1 === 'object',
+        intelG1 ? `entities=${JSON.stringify(intelG1.summary && intelG1.summary.entity_types)}` : 'intelligence=null');
+
+  // G2: GET /hive/intelligence endpoint returns the same data
+  const intelRes = await get(`${BASE_URL}/hive/intelligence/${gSessionId}`);
+  check('G2  GET /hive/intelligence returns intelligence data',
+        intelRes.status === 200 &&
+        intelRes.body && intelRes.body.session_id === gSessionId &&
+        typeof intelRes.body.intelligence === 'object',
+        JSON.stringify(intelRes.body && { state: intelRes.body.state, has_intel: !!intelRes.body.intelligence }));
+
+  // G3/G4: Fresh session — send one 4-category message.
+  // Under the new threshold (≥5 categories AND ≥4 turns), this must NOT trigger auto-stop.
+  await post(`${BASE_URL}/test/reset-alerts`, {});
+  const simG3base = await post(`${BASE_URL}/test/simulate-whatsapp`, {
+    from: gSender,
+    body: 'URGENT: Your account has been suspended. Visit http://securebank-verify.com/login to restore access or lose your funds permanently.',
+    id:   'g-int-msg-003'
+  });
+  const alertG3 = simG3base.body && simG3base.body.alert;
+  if (!alertG3) {
+    ['G3','G4','G5','G6'].forEach(t => console.log(`  [SKIP] ${t} — skipped: G3 scam alert not created`));
+    return;
+  }
+  const decG3 = await post(`${BASE_URL}/alerts/${alertG3.alert_id}/decision`, { action: 'ACTIVATE_HIVE' });
+  const g3SessionId = decG3.body && decG3.body.session_id;
+  if (!g3SessionId) {
+    ['G3','G4','G5','G6'].forEach(t => console.log(`  [SKIP] ${t} — skipped: G3 ACTIVATE_HIVE failed`));
+    return;
+  }
+
+  await post(`${BASE_URL}/test/simulate-whatsapp`, {
+    from: gSender,
+    body: 'Visit http://fake-secure.com/verify and call 9876543210. Please share the 6-digit OTP to proceed.',
+    id:   'g-int-msg-004'
+  });
+
+  const sessG3 = await get(`${BASE_URL}/test/session/${g3SessionId}`);
+  const sessionG3 = sessG3.body && sessG3.body.session;
+  check('G3  4 categories and 1 turn does NOT auto-stop session',
+        sessionG3 && sessionG3.state === 'HIVE_ACTIVE',
+        `state=${sessionG3 && sessionG3.state}`);
+
+  check('G4  stop_reason is null when auto-stop threshold not met',
+        sessionG3 && sessionG3.stop_reason === null,
+        `stop_reason=${JSON.stringify(sessionG3 && sessionG3.stop_reason)}`);
+
+  // G5/G6: New sender — build up ≥5 categories across 4 turns and confirm auto-stop.
+  //
+  // Turn 1: multi-category message → ≥5 cumulative categories, 1 turn → no stop (turns < 4)
+  // Turns 2–3: simple follow-ups → categories stay ≥5, 2–3 turns → no stop (turns < 4)
+  // Turn 4: final message → categories ≥5, 4 turns → auto-stop fires
+  //
+  // Turn-1 message is designed to produce:
+  //   PHONE + URL + OTP_REQUEST (entity types)
+  //   OTP_SOLICITATION + URGENCY (behaviour types)
+  //   = 5 distinct categories in a single message.
+  const g5Sender = '91gstop@c.us';
+
+  await post(`${BASE_URL}/test/reset-alerts`, {});
+  const simG5base = await post(`${BASE_URL}/test/simulate-whatsapp`, {
+    from: g5Sender,
+    body: 'URGENT: Your account has been suspended. Visit http://securebank-verify.com/login to restore access or lose your funds permanently.',
+    id:   'g5-msg-001'
+  });
+  const alertG5 = simG5base.body && simG5base.body.alert;
+  if (!alertG5) {
+    ['G5','G6'].forEach(t => console.log(`  [SKIP] ${t} — skipped: G5 scam alert not created`));
+    return;
+  }
+  const decG5 = await post(`${BASE_URL}/alerts/${alertG5.alert_id}/decision`, { action: 'ACTIVATE_HIVE' });
+  const g5SessionId = decG5.body && decG5.body.session_id;
+  if (!g5SessionId) {
+    ['G5','G6'].forEach(t => console.log(`  [SKIP] ${t} — skipped: G5 ACTIVATE_HIVE failed`));
+    return;
+  }
+
+  // Turn 1: ≥5 category message — session must stay HIVE_ACTIVE (turns = 1 < 4)
+  await post(`${BASE_URL}/test/simulate-whatsapp`, {
+    from: g5Sender,
+    body: 'URGENT: Visit http://fake-secure.com/verify and call 9876543210. Please share the 6-digit OTP to proceed. This is very urgent and time sensitive!!!',
+    id:   'g5-msg-002'
+  });
+  const sessAfterT1 = await get(`${BASE_URL}/test/session/${g5SessionId}`);
+  const stateAfterT1 = sessAfterT1.body && sessAfterT1.body.session && sessAfterT1.body.session.state;
+  // (informational — not a formal check; auto-stop requires turns ≥ 4)
+
+  // Turn 2: simple message — still below the turns threshold
+  await post(`${BASE_URL}/test/simulate-whatsapp`, {
+    from: g5Sender,
+    body: 'Please respond quickly.',
+    id:   'g5-msg-003'
+  });
+
+  // Turn 3: simple message — still below the turns threshold
+  await post(`${BASE_URL}/test/simulate-whatsapp`, {
+    from: g5Sender,
+    body: 'Are you still there?',
+    id:   'g5-msg-004'
+  });
+
+  // Turn 4: both conditions should now be met → auto-stop fires
+  await post(`${BASE_URL}/test/simulate-whatsapp`, {
+    from: g5Sender,
+    body: 'Hello?',
+    id:   'g5-msg-005'
+  });
+
+  const sessG5 = await get(`${BASE_URL}/test/session/${g5SessionId}`);
+  const sessionG5 = sessG5.body && sessG5.body.session;
+  check('G5  Session auto-stops only when ≥5 categories AND ≥4 turns (state=HIVE_ENDED)',
+        sessionG5 && sessionG5.state === 'HIVE_ENDED',
+        `state=${sessionG5 && sessionG5.state} cats=${sessionG5 && sessionG5.intelligence && sessionG5.intelligence.summary && JSON.stringify(sessionG5.intelligence.summary.entity_types)}`);
+
+  check('G6  Auto-stopped session has stop_reason starting with "auto:"',
+        sessionG5 && typeof sessionG5.stop_reason === 'string' &&
+        sessionG5.stop_reason.startsWith('auto:'),
+        `stop_reason=${sessionG5 && sessionG5.stop_reason}`);
+}
+
+// ── Case J (integration): Completed investigation persistence ─────────────────
+// Tests that saveCompletedInvestigation writes a JSON file with required fields
+// after auto-stop fires.
+
+async function runPersistenceIntegrationTests() {
+  if (!RUN_INTEGRATION) return;
+
+  console.log('\n── Case J (integration): Completed investigation persistence ──');
+
+  await post(`${BASE_URL}/test/reset-alerts`, {});
+
+  const jSim = await post(`${BASE_URL}/test/simulate-whatsapp`, {
+    from: '91jpersist@c.us',
+    body: 'URGENT: Your account has been suspended. Visit http://securebank-verify.com/login to restore access or lose your funds permanently.',
+    id:   'j-persist-001'
+  });
+  const jAlert = jSim.body && jSim.body.alert;
+
+  if (!jAlert) {
+    for (let i = 1; i <= 10; i++) console.log(`  [SKIP] J${i}  — skipped: J simulation failed`);
+    return;
+  }
+
+  const jHiveRes = await post(`${BASE_URL}/alerts/${jAlert.alert_id}/decision`, { action: 'ACTIVATE_HIVE' });
+  const jSessionId = jHiveRes.body && jHiveRes.body.session_id;
+
+  if (!jSessionId) {
+    for (let i = 1; i <= 10; i++) console.log(`  [SKIP] J${i}  — skipped: J ACTIVATE_HIVE failed`);
+    return;
+  }
+
+  // Send 4 turns to trigger auto-stop (≥5 categories + ≥4 turns)
+  await post(`${BASE_URL}/test/simulate-whatsapp`, {
+    from: '91jpersist@c.us',
+    body: 'URGENT: Visit http://fake-secure.com/verify and call 9876543210. Please share the 6-digit OTP to proceed. This is very urgent and time sensitive!!!',
+    id:   'j-persist-turn1'
+  });
+  await post(`${BASE_URL}/test/simulate-whatsapp`, {
+    from: '91jpersist@c.us',
+    body: 'Please provide your OTP code immediately or your account will be locked.',
+    id:   'j-persist-turn2'
+  });
+  await post(`${BASE_URL}/test/simulate-whatsapp`, {
+    from: '91jpersist@c.us',
+    body: 'Transfer the processing fee of Rs 499 to release your prize.',
+    id:   'j-persist-turn3'
+  });
+  await post(`${BASE_URL}/test/simulate-whatsapp`, {
+    from: '91jpersist@c.us',
+    body: 'Final warning: send the OTP and payment now before your account is suspended permanently.',
+    id:   'j-persist-turn4'
+  });
+
+  // Brief pause so the async file write completes before we check
+  await new Promise(r => setTimeout(r, 500));
+
+  const jIntelRes = await get(`${BASE_URL}/hive/intelligence/${jSessionId}`);
+
+  check('J1  auto-stopped session reaches HIVE_ENDED',
+        jIntelRes.body && jIntelRes.body.state === 'HIVE_ENDED',
+        `state=${jIntelRes.body && jIntelRes.body.state}`);
+
+  const fs       = require('fs');
+  const nodePath = require('path');
+  const jFilePath = nodePath.join(__dirname, '..', 'data', 'completed_sessions', `${jSessionId}.json`);
+
+  check('J2  completed investigation JSON file exists on disk',
+        fs.existsSync(jFilePath),
+        `expected file: ${jFilePath}`);
+
+  if (fs.existsSync(jFilePath)) {
+    const jSnap = JSON.parse(fs.readFileSync(jFilePath, 'utf8'));
+
+    check('J3  snapshot contains session_id',
+          jSnap.session_id === jSessionId,
+          `session_id=${jSnap.session_id}`);
+
+    check('J4  snapshot contains sender',
+          typeof jSnap.sender === 'string' && jSnap.sender.length > 0,
+          `sender=${jSnap.sender}`);
+
+    check('J5  snapshot contains conversation array',
+          Array.isArray(jSnap.conversation) && jSnap.conversation.length > 0,
+          `conversation.length=${jSnap.conversation && jSnap.conversation.length}`);
+
+    check('J6  snapshot contains intelligence with summary',
+          jSnap.intelligence && jSnap.intelligence.summary &&
+          Array.isArray(jSnap.intelligence.summary.entity_types),
+          'intelligence.summary.entity_types missing');
+
+    check('J7  snapshot contains stop_reason starting with "auto:"',
+          typeof jSnap.stop_reason === 'string' && jSnap.stop_reason.startsWith('auto:'),
+          `stop_reason=${jSnap.stop_reason}`);
+
+    check('J8  snapshot contains interaction_count >= 4',
+          typeof jSnap.interaction_count === 'number' && jSnap.interaction_count >= 4,
+          `interaction_count=${jSnap.interaction_count}`);
+
+    check('J9  snapshot contains completed_at timestamp',
+          typeof jSnap.completed_at === 'string' && jSnap.completed_at.length > 0,
+          `completed_at=${jSnap.completed_at}`);
+
+    check('J10 snapshot contains initial_message',
+          typeof jSnap.initial_message === 'string' && jSnap.initial_message.length > 0,
+          `initial_message=${jSnap.initial_message}`);
+  } else {
+    for (let i = 2; i <= 10; i++) console.log(`  [SKIP] J${i}  — skipped: file not created`);
+  }
+}
+
 // ── Run tests ────────────────────────────────────────────────────────────────
 
 runIntegrationTests()
   .then(() => runPhase12IntegrationTests())
+  .then(() => runHiveAutoReplyIntegrationTests())
+  .then(() => runIntelligenceIntegrationTests())
+  .then(() => runPersistenceIntegrationTests())
   .then(() => {
     console.log('\n════════════════════════════════════════════════════════════════');
     console.log(`PHASE 11/12 TEST SUMMARY: ${passed} / ${passed + failed} passed  (${failed} failed)`);
     if (!RUN_INTEGRATION) {
-      console.log('  Integration tests (C1–C19, E11–E15) skipped — set RUN_INTEGRATION=true and start server.');
+      console.log('  Integration tests (C1–C19, E11–E15, F8–F17, G1–G6, J1–J10) skipped — set RUN_INTEGRATION=true and start server.');
     }
     console.log('════════════════════════════════════════════════════════════════\n');
     if (failed > 0) process.exit(1);

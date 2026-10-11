@@ -140,6 +140,8 @@ function applyDecision(sessionId, action) {
     session.interaction_count  = 0;
     session.hive_started_at    = new Date().toISOString();
     session.hive_ended_at      = null;
+    session.intelligence       = null; // populated after each H.I.V.E. turn
+    session.stop_reason        = null; // set on auto-stop or preserved for display
   }
 
   return { ok: true, session };

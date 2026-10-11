@@ -139,6 +139,37 @@ function updateAlert(alertId, { status, decision }) {
 }
 
 /**
+ * Find the most recent HIVE_ACTIVE alert for a given sender.
+ * Used by server.js to route incoming WhatsApp messages to an active H.I.V.E.
+ * session instead of creating a new alert.
+ *
+ * Returns null when:
+ *   - sender is null / not a string
+ *   - no alert exists for this sender
+ *   - the sender's alerts are all BLOCKED, DISMISSED, or USER_DECISION_REQUIRED
+ *
+ * @param {string|null} sender - WhatsApp JID (e.g. "12345@c.us")
+ * @returns {object|null} The most recent HIVE_ACTIVE alert for this sender, or null.
+ */
+function getHiveActiveAlertBySender(sender) {
+  if (!sender || typeof sender !== 'string') return null;
+  return getAllAlerts().find(a =>
+    a.sender === sender && a.status === ALERT_STATES.HIVE_ACTIVE
+  ) || null;
+}
+
+/**
+ * Find the alert linked to a given session ID.
+ * Used when persisting a completed investigation snapshot.
+ * @param {string} sessionId
+ * @returns {object|null}
+ */
+function getAlertBySessionId(sessionId) {
+  if (!sessionId || typeof sessionId !== 'string') return null;
+  return [..._alerts.values()].find(a => a.session_id === sessionId) || null;
+}
+
+/**
  * Statistics for the /whatsapp/status endpoint.
  */
 function getStats() {
@@ -173,5 +204,7 @@ module.exports = {
   recordAnalysed,
   resetAlerts,
   getStats,
+  getHiveActiveAlertBySender,
+  getAlertBySessionId,
   ALERT_STATES
 };

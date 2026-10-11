@@ -61,6 +61,25 @@
     }
     .pending-item .score  { float: right; font-weight: 700; color: #c0392b; }
     .pending-empty { font-size: 12px; color: #95a5a6; }
+    .intel-section  { display: none; }
+    .intel-header   { font-size: 11px; text-transform: uppercase; letter-spacing: 0.4px; color: #7f8c8d; margin-bottom: 6px; }
+    .intel-row      { display: flex; justify-content: space-between; margin-bottom: 3px; font-size: 12px; }
+    .intel-key      { color: #7f8c8d; }
+    .intel-val      { font-weight: 600; color: #2c3e50; max-width: 160px; text-align: right; word-break: break-word; }
+    .intel-list     { margin-top: 4px; }
+    .intel-item     { padding: 3px 6px; background: #f0f4ff; border-radius: 3px; margin-bottom: 3px; font-size: 11px; border-left: 2px solid #3498db; }
+    .intel-stop     { margin-top: 6px; padding: 4px 8px; background: #fef9e7; border-radius: 4px; font-size: 11px; color: #d68910; border-left: 2px solid #f39c12; }
+    .intel-unverified { font-size: 10px; color: #bdc3c7; margin-top: 4px; }
+    .summary-msg  { background: #fdf3f3; border-left: 3px solid #e74c3c; padding: 5px 8px; border-radius: 4px; font-size: 11px; margin-bottom: 6px; word-break: break-word; }
+    .summary-risk        { font-weight: 700; }
+    .summary-risk-high   { color: #c0392b; }
+    .summary-risk-medium { color: #d68910; }
+    .summary-risk-low    { color: #1e8449; }
+    .summary-actions { margin-top: 8px; display: flex; flex-direction: column; gap: 4px; }
+    .btn-submit, .btn-nosubmit { padding: 5px 8px; border: none; border-radius: 4px; font-size: 11px; font-weight: 600; cursor: pointer; width: 100%; }
+    .btn-submit    { background: #2c3e50; color: #fff; }
+    .btn-nosubmit  { background: #ecf0f1; color: #2c3e50; }
+    .summary-confirm { padding: 6px 8px; border-radius: 4px; font-size: 11px; background: #f0f4ff; border-left: 2px solid #3498db; }
     .footer {
       padding: 8px 16px;
       font-size: 10px;
@@ -103,6 +122,11 @@
       <span class="value" id="pending-count">—</span>
     </div>
     <div class="pending-list" id="pending-list"></div>
+  </div>
+
+  <div class="section intel-section" id="intel-section">
+    <div class="intel-header">H.I.V.E. Evidence Collected</div>
+    <div id="intel-content"></div>
   </div>
 
   <div class="footer">Open WhatsApp Web to see live alerts</div>

@@ -23,7 +23,10 @@ let _contextValid = true;
 // Wraps chrome.runtime.sendMessage with context-invalidation safety.
 // Silently stops all future calls once the extension context is invalidated.
 function safeSendMessage(msg, callback) {
-  if (!_contextValid) return;
+  if (!_contextValid) {
+    if (callback) callback(null);
+    return;
+  }
   try {
     chrome.runtime.sendMessage(msg, (response) => {
       if (chrome.runtime.lastError) {
@@ -47,6 +50,7 @@ function safeSendMessage(msg, callback) {
     )) {
       _contextValid = false;
     }
+    if (callback) callback(null);
   }
 }
 

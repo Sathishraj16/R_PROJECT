@@ -16,10 +16,44 @@ server <- function(input, output, session) {
     d
   })
 
-  # Shortcut accessors (NULL-safe)
-  .risk  <- function() if (!is.null(demo)) demo$risk         else list()
-  .inv   <- function() if (!is.null(demo)) demo$investigation else list()
-  .convo <- function() if (!is.null(demo)) demo$conversation  else list()
+  # ── Discover completed live investigations (polls every 5 s) ────────────────
+  completed_sessions <- reactivePoll(
+    intervalMillis = 5000,
+    session        = session,
+    checkFunc      = function() {
+      dir <- "data/completed_sessions"
+      if (!dir.exists(dir)) return(0L)
+      length(list.files(dir, pattern = "\\.json$"))
+    },
+    valueFunc = function() load_live_investigations()
+  )
+
+  # ── Session selector UI ──────────────────────────────────────────────────────
+  output$session_selector_ui <- renderUI({
+    live <- completed_sessions()
+    choices <- c("Demo scenario" = "demo", live)
+    selectInput("session_selector", label = NULL,
+                choices = choices, selected = "demo", width = "100%")
+  })
+
+  # ── Active data: demo or selected live investigation ─────────────────────────
+  active_data <- reactive({
+    sel <- input$session_selector
+    if (is.null(sel) || sel == "demo") return(demo)
+    tryCatch(
+      load_completed_investigation(sel),
+      error = function(e) {
+        message("[server] Could not load investigation ", sel, ": ", conditionMessage(e))
+        demo
+      }
+    )
+  })
+
+  # Shortcut accessors (NULL-safe) — read active_data() so all existing
+  # render functions automatically reflect the selected session
+  .risk  <- function() { d <- active_data(); if (!is.null(d)) d$risk         else list() }
+  .inv   <- function() { d <- active_data(); if (!is.null(d)) d$investigation else list() }
+  .convo <- function() { d <- active_data(); if (!is.null(d)) d$conversation  else list() }
   .smry  <- function() {
     inv <- .inv()
     if (!is.null(inv$summary)) inv$summary else list()
@@ -113,14 +147,18 @@ server <- function(input, output, session) {
   })
 
   output$hive_metadata_table <- renderTable({
+    d     <- active_data()
     convo <- .convo()
     n_turns <- if (length(convo) > 0L) max(vapply(convo, function(m) as.integer(m$turn), integer(1L))) else 0L
+    sid   <- if (!is.null(d$session_id)) d$session_id
+             else if (!is.null(d) && !is.null(d$investigation$session_id)) d$investigation$session_id
+             else "demo-session-001"
     data.frame(
       Property = c("Session ID", "Decision", "State", "Scenario"),
-      Value    = c("demo-session-001",
+      Value    = c(sid,
                    "ACTIVATE_HIVE (explicit user consent)",
                    "HIVE_ENDED",
-                   if (!is.null(demo)) demo$scenario$scenario_name else "N/A"),
+                   if (!is.null(d) && !is.null(d$scenario)) d$scenario$scenario_name else "N/A"),
       stringsAsFactors = FALSE
     )
   }, striped = TRUE, hover = TRUE, spacing = "s", width = "100%", align = "ll")
@@ -297,6 +335,90 @@ server <- function(input, output, session) {
 
   # ── Tab 7: Live Monitor ──────────────────────────────────────────────────────
 
+  # ── Tab 6: Report decision (live sessions only) ──────────────────────────────
+
+  report_choice <- reactiveVal(NULL)   # "submit" | "no-submit" | NULL
+
+  # Reset the choice when the session selector changes
+  observeEvent(input$session_selector, {
+    report_choice(NULL)
+  })
+
+  output$report_decision_panel <- renderUI({
+    sel <- input$session_selector
+    if (is.null(sel) || sel == "demo") return(NULL)
+
+    d       <- active_data()
+    choice  <- report_choice()
+
+    if (!is.null(choice)) {
+      if (identical(choice, "submit")) {
+        return(div(class = "section-card",
+          div(class = "section-title", "Report Decision"),
+          div(style = "background:#eafaf1; border-left:4px solid #27ae60; padding:12px 16px;
+                       border-radius:0 6px 6px 0; font-size:13px; color:#1e8449;",
+            tags$strong("DEMO MODE — simulated only."),
+            br(),
+            "No report has been submitted to any external service.",
+            " WhatsApp blocking is simulated and has not occurred.",
+            br(), br(),
+            tags$em("This is a college project prototype. All actions are local and fictional.")
+          )
+        ))
+      } else {
+        return(div(class = "section-card",
+          div(class = "section-title", "Report Decision"),
+          div(style = "background:#fdf9f0; border-left:4px solid #f39c12; padding:12px 16px;
+                       border-radius:0 6px 6px 0; font-size:13px; color:#784212;",
+            tags$strong("No report submitted."),
+            br(),
+            "You chose not to submit a report. No data was sent anywhere.",
+            " WhatsApp blocking is simulated and has not occurred.",
+            br(), br(),
+            tags$em("Your choice not to submit has been preserved for this session.")
+          )
+        ))
+      }
+    }
+
+    stop_info <- if (!is.null(d$stop_reason)) {
+      div(style = "font-size:12px; color:#7f8c8d; margin-bottom:12px;",
+          paste0("Stopped: ", d$stop_reason,
+                 if (!is.null(d$completed_at)) paste0(" at ", substr(d$completed_at, 1L, 19L)) else ""))
+    } else NULL
+
+    div(class = "section-card",
+      div(class = "section-title", "Report Decision"),
+      stop_info,
+      p(style = "font-size:13px; color:#7f8c8d; margin-bottom:12px;",
+        "Both options are SIMULATED. No report is sent to any external service.",
+        " No WhatsApp blocking occurs."),
+      fluidRow(
+        column(6,
+          actionButton("btn_submit_report", "Submit report to cybersecurity team",
+            style = "background:#2c3e50; color:white; border:none; border-radius:4px;
+                     padding:8px 16px; font-size:13px; font-weight:600;
+                     cursor:pointer; width:100%;")
+        ),
+        column(6,
+          actionButton("btn_no_submit", "Do not submit report",
+            style = "background:#ecf0f1; color:#2c3e50; border:1px solid #bdc3c7;
+                     border-radius:4px; padding:8px 16px; font-size:13px;
+                     font-weight:600; cursor:pointer; width:100%;")
+        )
+      )
+    )
+  })
+
+  observeEvent(input$btn_submit_report, {
+    report_choice("submit")
+  }, ignoreInit = TRUE)
+
+  observeEvent(input$btn_no_submit, {
+    report_choice("no-submit")
+  }, ignoreInit = TRUE)
+
+  # ── Tab 7: Live Monitor ──────────────────────────────────────────────────────
   # Node.js API base URL for live polling
   .node_url <- function() Sys.getenv("NODE_URL", unset = "http://localhost:3000")
 

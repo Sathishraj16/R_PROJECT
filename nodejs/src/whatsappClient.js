@@ -18,7 +18,9 @@
 //     directly (for test simulation), but it never instantiates a real Client.
 //
 // SAFETY CONSTRAINTS:
-//   - This module only LISTENS. It never sends WhatsApp messages.
+//   - Incoming messages flow: WhatsApp → normalizeWhatsAppMessage → 'message' event.
+//   - Outgoing messages (H.I.V.E. replies): only via sendMessage(), called from server.js
+//     after explicit user activation. Never called automatically.
 //   - H.I.V.E. is never activated automatically from incoming messages.
 //   - Explicit user consent via POST /alerts/:id/decision is required for any action.
 
@@ -41,16 +43,34 @@ const WHATSAPP_ENABLED = process.env.WHATSAPP_ENABLED !== 'false';
 function normalizeWhatsAppMessage(msg) {
   // Extract serialized ID — whatsapp-web.js provides msg.id as a MessageId object.
   // _serialized is the canonical string form (e.g. "false_12345@c.us_ABCD...").
-  // Newer versions may expose it differently; fall back to null rather than storing
-  // the whole object.
+  //
+  // In multi-device (LID) sessions whatsapp-web.js ≥1.30 may not populate
+  // _serialized on the raw data.id object. Fallback: reconstruct the canonical
+  // form from the individual parts (fromMe + remote JID + message hash).
+  // This matches the format whatsapp-web.js itself produces when _serialized IS set.
   let msgId = null;
   if (msg && msg.id) {
     if (typeof msg.id === 'string') {
       msgId = msg.id;
     } else if (typeof msg.id._serialized === 'string' && msg.id._serialized) {
       msgId = msg.id._serialized;
+    } else if (msg.id.id && msg.id.remote) {
+      // Fallback for LID messages: reconstruct from parts.
+      // msg.id.remote can be a plain string JID or a WID object with ._serialized.
+      const remote = typeof msg.id.remote === 'string'
+        ? msg.id.remote
+        : (msg.id.remote && typeof msg.id.remote._serialized === 'string'
+            ? msg.id.remote._serialized
+            : null);
+      const hash = typeof msg.id.id === 'string' ? msg.id.id : null;
+      if (remote && hash) {
+        msgId = `${msg.id.fromMe ? 'true' : 'false'}_${remote}_${hash}`;
+      }
     }
-    // If neither branch matches, msgId stays null — deduplication is disabled for this message
+    if (!msgId) {
+      // Log once per unextractable ID so operators can report the exact msg.id shape.
+      console.log('[whatsapp] Cannot extract message ID — deduplication disabled for this message.');
+    }
   }
 
   return {
@@ -164,6 +184,30 @@ class WhatsAppMonitor extends EventEmitter {
   /** Whether the WhatsApp integration is enabled. */
   get isEnabled() {
     return this._enabled;
+  }
+
+  /**
+   * Send a WhatsApp message to a recipient.
+   *
+   * Only available after the client has authenticated and the 'ready' event has
+   * fired. Throws if the client is not initialised or not yet ready.
+   *
+   * Called by the H.I.V.E. auto-reply path in server.js — ONLY after explicit
+   * user activation (ACTIVATE_HIVE). Never called automatically.
+   *
+   * @param {string} to   - WhatsApp JID (e.g. "12345678@c.us")
+   * @param {string} text - Plain-text message to send
+   * @returns {Promise}   Resolves when whatsapp-web.js confirms the send.
+   * @throws              If not initialised or not ready.
+   */
+  async sendMessage(to, text) {
+    if (!this._client) {
+      throw new Error('[ScamTracer] WhatsApp client is not initialised.');
+    }
+    if (!this._isReady) {
+      throw new Error('[ScamTracer] WhatsApp client is not ready. Scan QR code first.');
+    }
+    return this._client.sendMessage(to, text);
   }
 
   /** Force the ready state — used by test mocks after emitting 'ready'. */

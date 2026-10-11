@@ -49,4 +49,7 @@ source("dashboard/ui.R")
 source("dashboard/server.R")
 
 # ── Launch ────────────────────────────────────────────────────────────────────
+# Ensure completed sessions directory exists (Node.js writes here; dashboard reads it)
+dir.create("data/completed_sessions", recursive = TRUE, showWarnings = FALSE)
+
 shinyApp(ui = ui, server = server)
