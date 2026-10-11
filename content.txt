@@ -1,0 +1,1088 @@
+================================================================================
+SCAMTRACER AI — COMPLETE PROJECT DOCUMENTATION
+================================================================================
+
+Project Name   : ScamTracer AI
+Architecture   : H.I.V.E. (Heuristic Intelligence & Virtual Entrapment)
+Type           : College project — Cyber-security and scam-intelligence system
+Current Phase  : Phase 12 — Complete
+Repository     : https://github.com/Sathishraj16/R_PROJECT
+Last Updated   : 2026-09-20
+
+--------------------------------------------------------------------------------
+TABLE OF CONTENTS
+--------------------------------------------------------------------------------
+  1.  What Is ScamTracer AI?
+  2.  The H.I.V.E. Concept
+  3.  How the System Works (End-to-End Flow)
+  4.  System Architecture
+  5.  Technology Stack
+  6.  Project Structure
+  7.  Core Components — Detailed Breakdown
+       7.1  R Analytics Engine
+       7.2  R Plumber API (Port 8000)
+       7.3  Node.js Communication Layer (Port 3000)
+       7.4  Chrome Extension (WhatsApp Web UI)
+       7.5  R Shiny Dashboard (Port 4000)
+  8.  Dataset
+  9.  Machine Learning Model
+ 10.  Risk Scoring System
+ 11.  Intelligence Extraction — Entity Types
+ 12.  Behaviour Analysis — Detection Categories
+ 13.  H.I.V.E. Controlled Engagement — Response Strategies
+ 14.  REST API Endpoints (Full List)
+ 15.  State Machine — Session Flow
+ 16.  Test Suites and Results
+ 17.  Environment Variables
+ 18.  How to Run (Step-by-Step)
+ 19.  Known Limitations
+ 20.  Important Design Decisions
+ 21.  What Is and Is NOT Implemented
+
+================================================================================
+1. WHAT IS SCAMTRACER AI?
+================================================================================
+
+ScamTracer AI is a cyber-security and scam-intelligence system that detects
+scam conversations in real time (via WhatsApp), alerts the user, and — with
+the user's explicit consent — engages the scammer in a controlled manner to
+extract actionable intelligence for investigation purposes.
+
+The system is built as a college project demonstration of the H.I.V.E.
+architecture using R as the primary analytical engine and Node.js as the
+communication/integration layer.
+
+Key goals:
+  - Automatically detect scam messages using NLP and machine learning.
+  - Notify the user when a suspicious message is detected.
+  - Give the user two choices: BLOCK & PROTECT (exit safely) or ACTIVATE
+    H.I.V.E. (begin controlled engagement).
+  - If H.I.V.E. is activated, engage the scammer with probing responses to
+    extract verifiable intelligence: phone numbers, UPI IDs, URLs, bank names,
+    transaction references, OTP requests, payment requests, etc.
+  - Analyse the scammer's behaviour patterns: urgency, threats, impersonation,
+    escalation, repeated requests.
+  - Display everything in a structured R Shiny investigation dashboard.
+
+CRITICAL RULE: The system NEVER automatically engages a scammer. H.I.V.E.
+activation requires explicit user consent at every step. No messages are ever
+sent to a scammer by the system without the user consciously choosing to
+ACTIVATE H.I.V.E. via the API or dashboard.
+
+================================================================================
+2. THE H.I.V.E. CONCEPT
+================================================================================
+
+H.I.V.E. stands for: Heuristic Intelligence & Virtual Entrapment
+
+Conceptual pipeline:
+  Detect  →  Engage  →  Extract  →  Report
+
+ScamTracer AI adaptation of this pipeline:
+
+  Incoming Conversation
+    → Scam Detection (R ML + rule-based indicators)
+    → User Notification (alert created)
+    → User explicitly chooses one of:
+          Option 1: BLOCK & PROTECT  — end interaction safely, no engagement
+          Option 2: ACTIVATE H.I.V.E. — begin controlled, logged engagement
+
+    → If H.I.V.E. is activated:
+          Controlled Engagement (Node.js generates probing responses)
+            → Intelligence Extraction (R extracts entities from conversation)
+                (phone numbers, UPI IDs, URLs, emails, bank names,
+                 transaction IDs, OTP requests, payment requests,
+                 credential requests)
+            → Behaviour Analysis (R detects scam patterns)
+                (urgency, threats, impersonation, escalation, repeated requests)
+            → Investigation Report (Shiny dashboard + factual statements)
+
+The H.I.V.E. engine generates deterministic, rule-based probing responses.
+It uses no external LLM or AI service. It never provides real credentials,
+OTPs, or payment authorisations to the scammer.
+
+================================================================================
+3. HOW THE SYSTEM WORKS (END-TO-END FLOW)
+================================================================================
+
+--- DETECTION PHASE ---
+
+Step 1: A WhatsApp message arrives.
+        WhatsApp Web (whatsapp-web.js) intercepts the message in real time.
+        Non-text messages (stickers, images, reactions) are skipped.
+
+Step 2: Node.js sends the message text to the R Plumber API (POST /analyze).
+
+Step 3: R analyses the message using two independent engines:
+        (a) ML Classification — Logistic Regression (Elastic Net), trained on
+            5,171 SMS messages, produces a spam probability (0–1).
+        (b) Rule-based Indicator Engine — 14 regex-pattern indicators
+            (OTP requests, account suspension threats, urgent language,
+            prize claims, UPI/payment references, etc.) produce an
+            indicator score (0–40).
+        Combined risk_score = round(ml_probability × 60 + min(40, indicators))
+        Risk levels: LOW (<30), MEDIUM (30–59), HIGH (≥60).
+
+Step 4: If risk_score ≥ 60 (configurable threshold), Node.js creates an alert
+        and the Chrome extension shows a floating panel on WhatsApp Web with:
+          - Sender, risk score, risk level, ML prediction
+          - Full message text (truncated at 200 chars)
+          - Detected indicator list
+          - Two action buttons: BLOCK & PROTECT | ACTIVATE H.I.V.E.
+
+--- DECISION PHASE ---
+
+Step 5: The user sees the alert and makes a conscious decision:
+        - BLOCK & PROTECT → session state becomes BLOCKED. No further action.
+        - ACTIVATE H.I.V.E. → session state becomes HIVE_ACTIVE.
+
+--- H.I.V.E. ENGAGEMENT PHASE (only if user chose ACTIVATE H.I.V.E.) ---
+
+Step 6: With session in HIVE_ACTIVE state, each scammer message is submitted
+        via POST /hive/message. The H.I.V.E. engine analyses the message and
+        selects a probing strategy (otp_deflection, payment_probe, url_probe,
+        etc.) and returns a probing response. Conversation is recorded.
+
+Step 7: After enough turns, the user ends the session via POST /hive/end.
+        Session state becomes HIVE_ENDED.
+
+--- INVESTIGATION PHASE ---
+
+Step 8: POST /investigate triggers R to analyse the full conversation:
+        (a) extract_entities() finds: PHONE, UPI_ID, URL, EMAIL, BANK_NAME,
+            TRANSACTION_ID, OTP_REQUEST, PAYMENT_REQUEST, CREDENTIAL_REQUEST.
+        (b) analyze_behaviour() detects: URGENCY, THREAT, IMPERSONATION,
+            OTP_SOLICITATION, PAYMENT_REQUEST, CREDENTIAL_REQUEST,
+            REPEATED_REQUEST, ESCALATION.
+        (c) investigate_session() produces factual summary statements using
+            cautious language ("Observed..."), never asserting identity.
+
+--- VISUALISATION PHASE ---
+
+Step 9: The R Shiny dashboard (port 4000) displays the complete investigation
+        across 7 tabs:
+          Tab 1 — Overview / Risk      (score, level, prediction, indicators)
+          Tab 2 — H.I.V.E. Status      (state, turns, metadata)
+          Tab 3 — Conversation         (styled full transcript)
+          Tab 4 — Intelligence         (entity table + chart)
+          Tab 5 — Behaviour Analysis   (pattern table + chart)
+          Tab 6 — Investigation Summary (statements, escalation, disclaimers)
+          Tab 7 — Live Monitor         (real-time WhatsApp alert feed)
+
+================================================================================
+4. SYSTEM ARCHITECTURE
+================================================================================
+
+  WhatsApp Web (browser)
+          |
+  Chrome Extension (MV3)              ← Floating panel on WhatsApp Web
+  extension/background.js             ← Service worker (all HTTP via here)
+  extension/content.js                ← Polls GET /alerts every 2 seconds
+  extension/popup.html / popup.js     ← Toolbar popup: status + pending alerts
+          |
+          | HTTP (localhost:3000)
+          ↓
+  Node.js Communication Layer         ← Port 3000
+  nodejs/src/server.js                ← All REST endpoints
+  nodejs/src/sessionStore.js          ← In-memory session state machine
+  nodejs/src/hiveEngine.js            ← Deterministic H.I.V.E. response engine
+  nodejs/src/alertStore.js            ← In-memory alert store
+  nodejs/src/whatsappClient.js        ← WhatsAppMonitor (whatsapp-web.js)
+  nodejs/src/rApiClient.js            ← R Plumber API client
+          |
+          | HTTP (localhost:8000)
+          ↓
+  R Plumber API                       ← Port 8000
+  R/api/plumber.R                     ← GET /health, POST /analyze,
+                                         POST /investigate
+          |
+          ↓
+  R Analytics Engine
+    ├── R/preprocessing/cleaner.R       ← Data cleaning pipeline
+    ├── R/nlp/text_features.R           ← TF-IDF feature engineering
+    ├── R/models/classifier.R           ← ML model training
+    ├── R/analysis/risk_scorer.R        ← predict_scam() + analyze_risk()
+    ├── R/utils/helpers.R               ← detect_indicators() (14 rules)
+    ├── R/analysis/intelligence_extractor.R  ← extract_entities() +
+    │                                          investigate_session()
+    ├── R/analysis/behaviour_analyzer.R ← analyze_behaviour()
+    └── R/network/entity_graph.R        ← [NOT IMPLEMENTED]
+          |
+          ↓
+  R Shiny Dashboard                   ← Port 4000
+  dashboard/app.R                     ← Entry point
+  dashboard/ui.R                      ← Seven-tab navbarPage UI
+  dashboard/server.R                  ← Reactive server logic
+  dashboard/helpers.R                 ← Data bridge + chart builders
+
+================================================================================
+5. TECHNOLOGY STACK
+================================================================================
+
+  Layer                    Technology                  Status
+  ─────────────────────────────────────────────────────────────────────────────
+  Messaging interface      WhatsApp (whatsapp-web.js   IMPLEMENTED — Phase 11
+                           v1.34.7 + qrcode-terminal)  (QR auth, detection only)
+
+  Browser extension        Chrome MV3 (Manifest V3)    IMPLEMENTED — Phase 12
+                           content.js + service worker  (floating alert panel)
+
+  Communication layer      Node.js v20.18.0             IMPLEMENTED — Phase 6–11
+                           Express 4.x + Axios          (port 3000)
+
+  REST API layer           R Plumber 1.3.3              IMPLEMENTED — Phase 5
+                           (HTTP, CORS enabled)          (port 8000)
+
+  Data processing          R 4.6.1                      IMPLEMENTED — Phase 2
+                           dplyr 1.2.1, tidyr 1.3.2,
+                           stringr 1.5.x
+
+  NLP                      R — tidytext 0.4.3           IMPLEMENTED — Phase 2
+                           TF-IDF feature extraction     (510 features)
+
+  ML Classification        R — glmnet 5.0               IMPLEMENTED — Phase 3
+                           Logistic Regression           Accuracy: 94.3%
+                           (Elastic Net, alpha=0.5)      AUC: 0.9639
+
+  Risk scoring             R — analyze_risk()           IMPLEMENTED — Phase 4
+                           Composite 0–100 score        (ML 60% + rules 40%)
+
+  Rule-based indicators    R — detect_indicators()      IMPLEMENTED — Phase 4
+                           14 scam-pattern rules         (R/utils/helpers.R)
+
+  Behaviour analysis       R — analyze_behaviour()      IMPLEMENTED — Phase 9
+                           8 scam behaviour patterns     (Phase 9)
+
+  Intelligence extraction  R — extract_entities()       IMPLEMENTED — Phase 9
+                           9 entity types + provenance
+
+  Graph / network analysis R — igraph, ggraph,          NOT IMPLEMENTED
+                           tidygraph
+
+  Visualisation            R — ggplot2 4.0.3            IMPLEMENTED — Phase 3
+                           3 evaluation charts           (reports/)
+
+  Dashboard                R Shiny 1.14.0               IMPLEMENTED — Phase 10/11
+                           7-tab navbarPage              (port 4000)
+
+  Reporting                R                            NOT IMPLEMENTED
+
+================================================================================
+6. PROJECT STRUCTURE
+================================================================================
+
+  E:\R PROJECT\
+  │
+  ├── README.md                       Project overview and run instructions
+  ├── PROJECT_RULES.md                Permanent architecture and coding rules
+  ├── PROJECT_LOG.md                  Phase-by-phase chronological history
+  ├── CLAUDE_HANDOVER.md              AI handover — current-state snapshot
+  ├── content.txt                     THIS FILE — full project documentation
+  ├── ScamTracerAI.Rproj              R project file (open in RStudio)
+  ├── renv_setup.R                    Run once to install R packages
+  ├── renv.lock                       Exact R package versions snapshot
+  ├── .gitignore                      Excludes node_modules, auth files, data
+  │
+  ├── R/
+  │   ├── main.R                      R engine entry point (placeholder)
+  │   ├── eda_phase2.R                EDA script (Phase 2)
+  │   ├── api/
+  │   │   └── plumber.R               R Plumber REST API (port 8000)
+  │   ├── preprocessing/
+  │   │   └── cleaner.R               Data cleaning pipeline
+  │   ├── nlp/
+  │   │   └── text_features.R         TF-IDF feature engineering
+  │   ├── models/
+  │   │   └── classifier.R            ML model training + evaluation
+  │   ├── analysis/
+  │   │   ├── risk_scorer.R           predict_scam() + analyze_risk()
+  │   │   ├── intelligence_extractor.R  extract_entities() + investigate_session()
+  │   │   └── behaviour_analyzer.R    analyze_behaviour()
+  │   ├── network/
+  │   │   └── entity_graph.R          Entity correlation graph (placeholder)
+  │   └── utils/
+  │       └── helpers.R               detect_indicators() — 14 scam rules
+  │
+  ├── nodejs/
+  │   ├── package.json                Node.js manifest (Express, Axios,
+  │   │                               whatsapp-web.js, qrcode-terminal)
+  │   └── src/
+  │       ├── server.js               Main Express server — all endpoints
+  │       ├── rApiClient.js           R Plumber API client
+  │       ├── sessionStore.js         In-memory session state machine
+  │       ├── hiveEngine.js           H.I.V.E. response engine (7 strategies)
+  │       ├── alertStore.js           In-memory alert storage
+  │       ├── whatsappClient.js       WhatsAppMonitor EventEmitter
+  │       ├── analysisLogger.js       Terminal analysis block formatter
+  │       ├── riskResultValidator.js  validateRiskResult() — defence-in-depth
+  │       └── runHiveDemo.js          End-to-end H.I.V.E. demo runner
+  │
+  ├── extension/
+  │   ├── manifest.json               Chrome MV3 manifest
+  │   ├── background.js               Service worker — all HTTP calls
+  │   ├── content.js                  WhatsApp Web content script
+  │   │                               (polls /alerts; floating alert panel)
+  │   ├── popup.html                  Toolbar popup HTML
+  │   ├── popup.js                    Toolbar popup logic
+  │   ├── styles.css                  Alert panel CSS
+  │   └── README.md                   Manual installation + test steps
+  │
+  ├── dashboard/
+  │   ├── app.R                       Shiny entry point (port 4000)
+  │   ├── ui.R                        Seven-tab navbarPage UI
+  │   ├── server.R                    Server reactive logic
+  │   └── helpers.R                   Data bridge, chart builders,
+  │                                   Node.js API fetch helpers
+  │
+  ├── data/
+  │   ├── raw/                        Original datasets (not in Git)
+  │   │   └── SMSSpamCollection       UCI SMS Spam dataset (5,574 records)
+  │   ├── processed/                  Cleaned + feature-engineered data
+  │   │   ├── sms_cleaned.csv         5,171 × 11 cleaned dataset
+  │   │   ├── sms_tfidf.csv           5,171 × 510 TF-IDF feature matrix
+  │   │   └── sms_tokens.csv          Long-form tokenised data
+  │   └── demo/
+  │       ├── hive_demo_scenario.json  Fictional 5-turn banking scam demo
+  │       └── demo_session_output.json Demo investigation output
+  │
+  ├── models/
+  │   ├── scamtracer_model.rds        Trained glmnet model (165 KB)
+  │   ├── model_vocab.rds             Feature vocabulary (508 terms)
+  │   └── model_metadata.rds          Training config + evaluation metrics
+  │
+  ├── reports/
+  │   ├── class_distribution.png      Class distribution bar chart
+  │   ├── model_comparison.png        3-model comparison chart
+  │   └── confusion_matrix.png        Confusion matrix heatmap
+  │
+  └── tests/
+      ├── test_risk_engine.R          Phase 4 — 69/69 tests
+      ├── test_api.R                  Phase 5 — 55/55 tests
+      ├── test_integration.js         Phase 6 — 53/53 tests
+      ├── test_decision_flow.js       Phase 7 — 54/54 tests
+      ├── test_hive_engagement.js     Phase 8 — 63/63 tests
+      ├── test_intelligence_behaviour.R  Phase 9 — 79/79 tests
+      ├── test_dashboard.R            Phase 10 — 83/83 tests
+      ├── test_whatsapp.js            Phase 11/12 — 54/54 unit tests
+      └── test_extension.js           Phase 12 — 35/35 tests
+
+================================================================================
+7. CORE COMPONENTS — DETAILED BREAKDOWN
+================================================================================
+
+────────────────────────────────────────────────────────────────────────────────
+7.1  R ANALYTICS ENGINE
+────────────────────────────────────────────────────────────────────────────────
+
+R is the sole analytical core. Node.js never performs any analytical work.
+
+  R/utils/helpers.R — detect_indicators(text), indicator_summary(indicators)
+    14 rule-based scam indicator patterns, each with a weight, severity, and
+    regex. Examples:
+      - OTP Request (weight 12, HIGH)
+      - Account Suspension Threat (weight 10, HIGH)
+      - Urgent Language (weight 6, MEDIUM)
+      - Prize / Reward Claim (weight 8, MEDIUM)
+      - UPI ID / Payment Reference (weight 8, HIGH)
+      - Phone Number in Message (weight 6, MEDIUM)
+      - Banking / Account Language (weight 5, MEDIUM)
+      - Financial / Payment Language (weight 7, HIGH)
+      - Credential Sharing Request (weight 10, HIGH)
+      ... and more
+    Indicator score is capped at 40 to prevent over-triggering on heuristics.
+
+  R/analysis/risk_scorer.R — predict_scam(text), analyze_risk(message)
+    predict_scam(): Phase 3 interface — loads model, tokenises text against
+      the 508-term vocabulary, computes TF-IDF vector, runs glmnet prediction.
+      Returns: predicted_class, spam_probability, risk_level, heuristic_flags.
+    analyze_risk(): Phase 4 interface — calls predict_scam() then
+      detect_indicators(), combines results into a 0–100 risk score.
+      Returns: prediction, model_probability, ml_score, indicator_score,
+               risk_score, risk_level, detected_indicators, explanations, caveat.
+
+  R/analysis/intelligence_extractor.R — extract_entities(), investigate_session()
+    extract_entities(conversation): scans each turn with 9 regex pattern sets.
+    investigate_session(session_id, conversation): orchestrates full extraction
+      + behaviour analysis, returns structured summary with factual statements.
+      Safety: never fabricates evidence. Only extracts what is in the text.
+      Language: "Observed..." statements, never "this person is a scammer."
+
+  R/analysis/behaviour_analyzer.R — analyze_behaviour(conversation)
+    Analyses INCOMING turns only. Detects URGENCY, THREAT, IMPERSONATION,
+    OTP_SOLICITATION, PAYMENT_REQUEST, CREDENTIAL_REQUEST, REPEATED_REQUEST
+    (same category in 2+ turns), ESCALATION (rising severity rank over turns).
+    Escalation rank system: 1=impersonation, 2=urgency, 3=threat, 4=OTP,
+                            5=credential, 6=payment.
+
+────────────────────────────────────────────────────────────────────────────────
+7.2  R PLUMBER API (PORT 8000)
+────────────────────────────────────────────────────────────────────────────────
+
+File: R/api/plumber.R
+Start: Rscript -e 'pr <- plumber::plumb("R/api/plumber.R"); pr$run(host="0.0.0.0", port=8000)'
+
+  GET  /health      — Returns: status, service, version, r_version, model_loaded,
+                       model_name (Logistic Regression Elastic Net), model_f1,
+                       model_auc. Does NOT run a prediction.
+
+  POST /analyze     — Input: {"message": "<text>"}
+                       Calls analyze_risk() and returns the full result JSON.
+                       Validates input; returns HTTP 400 for invalid input.
+                       Returns HTTP 500 on analysis failure (no stack trace).
+
+  POST /investigate — Input: {"session_id": "<id>", "conversation": [...]}
+                       Calls investigate_session() and returns entities,
+                       behaviours, and investigation summary statements.
+
+  CORS filter: all origins permitted (development only).
+  Serializer: auto_unbox=TRUE — clean JSON, no array-wrapped scalars.
+  Environment: all R modules sourced with local=environment() so functions
+               are visible to Plumber handler closures.
+
+────────────────────────────────────────────────────────────────────────────────
+7.3  NODE.JS COMMUNICATION LAYER (PORT 3000)
+────────────────────────────────────────────────────────────────────────────────
+
+File: nodejs/src/server.js
+Start: cd "E:/R PROJECT/nodejs" && npm start
+
+The Node.js layer is a pure communication relay. It validates input, manages
+sessions, and forwards analysis work to R. It never calculates risk scores.
+
+Key modules:
+  server.js          — Express server, all routing and endpoint logic
+  rApiClient.js      — analyzeMessage(), checkRHealth(), investigateConversation()
+                        R_API_URL (env var, default http://localhost:8000)
+  sessionStore.js    — In-memory session state machine
+                        STATES: NORMAL, USER_DECISION_REQUIRED, BLOCKED,
+                                HIVE_ACTIVE, HIVE_ENDED
+                        Functions: createSession(), applyDecision(),
+                                   addInteraction(), endHiveSession()
+  hiveEngine.js      — generateResponse(message, interactionCount)
+                        7 strategies × 3 cycling templates
+                        No LLM. No real credentials ever generated.
+  alertStore.js      — createAlert(), getAlert(), getAllAlerts(), resetAlerts()
+                        Deduplication by WhatsApp message ID
+                        ALERT_STATES: USER_DECISION_REQUIRED, BLOCKED,
+                                      HIVE_ACTIVE, HIVE_ENDED
+  whatsappClient.js  — WhatsAppMonitor EventEmitter wrapping whatsapp-web.js
+                        Injectable factory for test mocking
+                        WHATSAPP_ENABLED=false = no real client (dev mode)
+                        Events: qr, ready, message, disconnected, error
+  analysisLogger.js  — formatAnalysisLog() — human-readable terminal block
+                        printed for every incoming WhatsApp message
+  riskResultValidator.js — validateRiskResult() — rejects malformed R results
+                        (non-finite numbers, missing fields)
+
+────────────────────────────────────────────────────────────────────────────────
+7.4  CHROME EXTENSION (WHATSAPP WEB UI)
+────────────────────────────────────────────────────────────────────────────────
+
+The extension runs on https://web.whatsapp.com/* and shows a floating alert
+panel whenever a suspicious message is detected.
+
+  manifest.json    — MV3; content script on WhatsApp Web; background service
+                     worker; host_permissions for http://localhost:3000/*
+
+  background.js    — Service worker handling messages from content.js:
+                       FETCH_ALERTS   → GET /alerts
+                       FETCH_STATUS   → GET /whatsapp/status
+                       POST_DECISION  → POST /alerts/:id/decision
+                     All HTTP goes through the service worker (content scripts
+                     cannot make HTTP requests from an HTTPS page to localhost).
+
+  content.js       — Polls GET /alerts every 2 seconds
+                     shouldShowAlert(): shows panel if status=USER_DECISION_REQUIRED
+                       AND risk_score >= 60
+                     Deduplicates by alert_id (Set)
+                     renderPanel(): shows sender, risk badge, message text
+                       (200-char limit), detected indicators as bullet list
+                     Buttons: BLOCK & PROTECT | ACTIVATE H.I.V.E.
+                     Context-invalidation safety: _contextValid flag +
+                       safeSendMessage() wrapper catches chrome.runtime.lastError
+                     NEVER calls WhatsApp Web internal APIs
+                     NEVER sends messages to contacts
+
+  popup.html/js    — Toolbar popup showing: backend connection status,
+                     WhatsApp state, risk threshold, pending alert count,
+                     and preview of up to 3 pending alerts.
+
+  styles.css       — Fixed top-right floating panel, colour-coded by risk:
+                       HIGH/critical = red, MEDIUM = amber, LOW = green
+                       Slide-in animation.
+
+Safety constraints (all enforced and verified by tests):
+  - Extension never sends a message to the suspicious sender
+  - Extension never automatically activates H.I.V.E.
+  - Extension never exposes risk analysis to the scammer
+  - content.js contains zero WhatsApp Web internal API calls (verified by E4 test)
+  - Alert panel cannot be dismissed without making an explicit decision
+
+────────────────────────────────────────────────────────────────────────────────
+7.5  R SHINY DASHBOARD (PORT 4000)
+────────────────────────────────────────────────────────────────────────────────
+
+Files: dashboard/app.R, ui.R, server.R, helpers.R
+Start: Rscript -e 'shiny::runApp("dashboard", port=4000, launch.browser=FALSE)'
+NOTE: The dashboard calls R analytics functions directly. Node.js and R Plumber
+      do NOT need to be running. The dashboard is standalone.
+
+  Tab 1 — Overview / Risk
+    Session message, risk score bar (0–100), risk level badge (LOW/MEDIUM/HIGH),
+    ML prediction (SCAM/LEGITIMATE), model probability, ML score, indicator score,
+    detected indicators list, plain-English explanations, statistical caveat.
+
+  Tab 2 — H.I.V.E. Status
+    Session state (HIVE_ENDED), engagement turns, total messages, metadata table,
+    explicit consent note.
+
+  Tab 3 — Conversation
+    Full transcript of the H.I.V.E. engagement (5 turns = 10 messages), styled
+    with direction-coloured rows. SCAMMER turns vs H.I.V.E. turns clearly labelled.
+
+  Tab 4 — Intelligence
+    Entity extraction table: Type / Value / Turn / Direction / Source text.
+    Entity type filter. Entity type bar chart (ggplot2). Count summary.
+
+  Tab 5 — Behaviour Analysis
+    Behaviour detection table: Behaviour / Severity / Turn / Evidence text.
+    Behaviour frequency bar chart (ggplot2). Escalation and repeated-request
+    alerts.
+
+  Tab 6 — Investigation Summary
+    Factual investigation statements (generated by investigate_session() in R).
+    Summary counts table. Escalation detected / repeated requests detected.
+    Full project disclaimer.
+
+  Tab 7 — Live Monitor
+    Polls GET /whatsapp/status and GET /alerts every 2 seconds (reactivePoll).
+    Shows connection state, total_analysed, total_suspicious, pending_decisions.
+    Alert cards with BLOCK & PROTECT / ACTIVATE H.I.V.E. decision buttons.
+    If Node.js is not running, shows "Not connected" gracefully.
+
+================================================================================
+8. DATASET
+================================================================================
+
+Name     : UCI SMS Spam Collection v.1
+Source   : UCI Machine Learning Repository
+URL      : https://archive.ics.uci.edu/dataset/228/sms+spam+collection
+License  : Creative Commons Attribution 4.0 International (CC BY 4.0)
+Citation : Almeida, T. & Hidalgo, J. (2011). SMS Spam Collection [Dataset].
+           UCI Machine Learning Repository. https://doi.org/10.24432/C5CC84
+
+Raw records       : 5,574
+After dedup       : 5,171 (403 exact duplicates removed)
+ham (legitimate)  : 4,518 (87.37%)
+spam              : 653   (12.63%)
+Columns           : 11 (label, spam_label, text, char_count, word_count,
+                    has_url, has_phone, has_currency, has_free, has_urgent,
+                    has_prize)
+
+Key EDA findings:
+  - Spam messages average 138.7 characters vs 71.5 for ham (spam = longer)
+  - Phone numbers present in 75.6% of spam vs 0.1% of ham
+  - Currency symbols in 34.7% of spam vs 0.4% of ham
+  - URLs in 14.1% of spam vs 0% of ham
+  - "free" keyword in 22.8% of spam vs 1.2% of ham
+
+Known limitation: Dataset is UK/Singapore-origin English SMS. India-specific
+scam patterns (UPI IDs, OTP fraud, KYC fraud, NEFT/IMPS) are NOT in the
+training data. The ML model may score India-specific scam messages as
+LEGITIMATE. The rule-based indicator engine and Phase 9 entity extraction
+compensate for this independently of the ML model.
+
+Preprocessing (cleaner.R):
+  - Removed 403 duplicate rows
+  - Trimmed whitespace
+  - Added binary spam_label, char_count, word_count, entity flags
+  - URLs, phone numbers, currency symbols deliberately NOT stripped
+    (needed for H.I.V.E. intelligence extraction in Phase 9)
+
+NLP feature extraction (text_features.R):
+  - Tokenised to unigrams (tidytext::unnest_tokens)
+  - Removed standard stop words (with exceptions: free, win, urgent, otp,
+    upi, kyc, blocked, credit, loan, award, claim, etc.)
+  - Removed pure-number tokens and single-character tokens
+  - TF-IDF computed via tidytext::bind_tf_idf
+  - Top 500 terms selected by max TF-IDF
+  - Pivoted to document × term matrix (5,171 × 510)
+
+================================================================================
+9. MACHINE LEARNING MODEL
+================================================================================
+
+Algorithm   : Logistic Regression (Elastic Net)
+Package     : glmnet 5.0
+Parameters  : alpha=0.5 (elastic net), lambda=lambda.1se (0.005131, simpler)
+Training    : 4,136 rows (stratified 80/20 split)
+Test set    : 1,035 rows (stratified)
+
+  Metric              Value
+  ──────────────────────────
+  Accuracy            0.9430
+  Precision (spam)    0.7609
+  Recall (spam)       0.8015
+  F1 Score (spam)     0.7807
+  AUC                 0.9639
+  TP                  105
+  FP                  33
+  TN                  871
+  FN                  26
+
+Model selection rationale:
+  Three models were trained and compared:
+    1. Naive Bayes (e1071)         — FAILED: degenerate all-spam predictions
+                                     (AUC=0.50). Gaussian NB incompatible with
+                                     sparse TF-IDF. Documented as teaching point.
+    2. Logistic Regression (glmnet) — SELECTED: best F1 (0.7807) + AUC (0.9639)
+    3. Decision Tree (rpart)        — lower F1 and AUC than Elastic Net
+
+  lambda.1se was chosen over lambda.min — prefers simpler model, reduces
+  overfitting on the 508-dimensional sparse feature space.
+
+Vocabulary : 508 TF-IDF terms + 2 numeric features = 510 total features
+Saved to   :
+  models/scamtracer_model.rds    (trained glmnet model, 165 KB)
+  models/model_vocab.rds         (508-term vocabulary)
+  models/model_metadata.rds      (training config + metrics)
+
+IMPORTANT: model_probability is a statistical estimate, not a certainty.
+Every analyze_risk() result includes a caveat field stating this.
+
+================================================================================
+10. RISK SCORING SYSTEM
+================================================================================
+
+Function: analyze_risk(message) in R/analysis/risk_scorer.R
+
+Formula:
+  ml_score        = spam_probability × 60           range: [0.0, 60.0]
+  indicator_score = min(40, sum(indicator_weights))  range: [0, 40], capped
+  risk_score      = round(ml_score + indicator_score) range: [0, 100]
+
+Risk levels:
+  LOW     : risk_score < 30
+  MEDIUM  : risk_score 30–59
+  HIGH    : risk_score ≥ 60
+
+Alert threshold (for WhatsApp live monitor): default 60 (configurable via
+  SCAMTRACER_RISK_THRESHOLD environment variable).
+
+Decision policy (Node.js state machine):
+  LOW risk    → NORMAL state (no alert, no user action required)
+  MEDIUM risk → USER_DECISION_REQUIRED (alert created, user must decide)
+  HIGH risk   → USER_DECISION_REQUIRED (NOT automatic HIVE_ACTIVE)
+
+The 60/40 split rationale:
+  ML model is the primary evidence source (60%). Rule-based indicators are
+  supplementary and capped (40%) to prevent false HIGH ratings from heuristics
+  alone when the ML model is uncertain.
+
+================================================================================
+11. INTELLIGENCE EXTRACTION — ENTITY TYPES
+================================================================================
+
+File: R/analysis/intelligence_extractor.R
+Function: extract_entities(conversation), investigate_session(session_id, conversation)
+
+  Entity Type          Detection Method
+  ─────────────────────────────────────────────────────────────────────────────
+  PHONE                Regex: 10-digit Indian mobile numbers, international
+                        formats (e.g., +91XXXXXXXXXX)
+  UPI_ID               Regex: username@bank pattern without TLD
+                        (disambiguated from EMAIL by absence of TLD)
+  URL                  Regex: http(s):// prefixed strings
+  EMAIL                Regex: user@domain.tld pattern (requires TLD like .com)
+  BANK_NAME            Curated dictionary of 20+ bank name fragments
+                        (SBI, HDFC, ICICI, Axis, FakeSecure, etc.)
+  TRANSACTION_ID       Keyword prefix (ref/txn/transaction/ticket) +
+                        digit-containing ID (at least one digit required
+                        to prevent matching plain English words)
+  OTP_REQUEST          Keywords: "otp", "6-digit", "one-time code", "passcode"
+  PAYMENT_REQUEST      Keywords: "transfer", "send money", "pay", "upi id",
+                        "neft", "Rs", "rupees"
+  CREDENTIAL_REQUEST   Keywords: "password", "atm pin", "cvv", "net banking"
+
+Each extracted entity includes full provenance:
+  entity_type, value, source_text, turn (number), direction (INCOMING/OUTGOING)
+
+Safety principle: Only extracts entities present in the actual conversation.
+Never fabricates intelligence. All demo identifiers are fictional.
+
+Factual statements use cautious language: "Observed X" — never "this is a scammer."
+
+================================================================================
+12. BEHAVIOUR ANALYSIS — DETECTION CATEGORIES
+================================================================================
+
+File: R/analysis/behaviour_analyzer.R
+Function: analyze_behaviour(conversation)
+
+Analyses INCOMING turns only (scammer messages).
+
+  Behaviour           Severity  Detection Method
+  ─────────────────────────────────────────────────────────────────────────────
+  URGENCY             HIGH      Time-pressure keywords: "immediately", "final
+                                warning", "within N hours/minutes", "today"
+  THREAT              HIGH      Suspension/block keywords: "suspended",
+                                "frozen", "deactivated", "blocked", "closed"
+  IMPERSONATION       HIGH      "security team", "fraud department", "from
+                                SBI/HDFC/bank", official authority claims
+  OTP_SOLICITATION    HIGH      OTP keyword patterns (same as entity engine)
+  PAYMENT_REQUEST     HIGH      Payment keyword patterns
+  CREDENTIAL_REQUEST  HIGH      Credential keyword patterns
+  REPEATED_REQUEST    MEDIUM    Same category detected in 2+ distinct turns
+  ESCALATION          HIGH      Sensitivity rank increases across turns
+                                Rank system: 1=impersonation, 2=urgency,
+                                3=threat, 4=OTP, 5=credential, 6=payment
+
+Every behaviour record includes: behaviour type, severity, turn number, and
+the specific evidence text that triggered the detection.
+
+================================================================================
+13. H.I.V.E. CONTROLLED ENGAGEMENT — RESPONSE STRATEGIES
+================================================================================
+
+File: nodejs/src/hiveEngine.js
+Function: generateResponse(message, interactionCount)
+
+The H.I.V.E. engine is fully deterministic and rule-based. No external LLM.
+No AI API calls. No real credentials, OTPs, or payments ever generated.
+
+7 response strategies, each with 3 cycling response templates:
+
+  Strategy               Trigger Patterns
+  ─────────────────────────────────────────────────────────────────────────────
+  otp_deflection         "otp", "6-digit", "one-time code/password"
+  credential_deflection  "password", "pin", "cvv", "net banking"
+  payment_probe          "transfer", "upi id", "send money", "neft"
+  suspension_probe       "suspend", "freeze", "deactivate", "block"
+  url_probe              "http://", "www.", "click here", "open link"
+  prize_probe            "won", "prize", "lottery", "congratulation"
+  neutral_clarification  (fallback — no other pattern matched)
+
+Template cycling: templates rotate by interaction_count mod 3, so turns 1/4/7
+use template 1, turns 2/5/8 use template 2, turns 3/6/9 use template 3.
+This prevents identical responses across multiple turns.
+
+All H.I.V.E. responses are probing questions only — they ask for details,
+question official documentation, or request verification. They never provide
+credentials, authorise payments, or accept scammer claims.
+
+================================================================================
+14. REST API ENDPOINTS (FULL LIST)
+================================================================================
+
+R PLUMBER API — Port 8000
+  GET  /health               Liveness + model status
+  POST /analyze              Risk analysis on a message
+  POST /investigate          Entity + behaviour analysis on a conversation
+
+NODE.JS API — Port 3000
+  GET  /health               Node.js + R backend status
+  POST /analyze              Analyze a message (relay to R, no session)
+  POST /message              Full intake: analyze → create session → notify user
+  POST /decision             User decision on a session (BLOCK_AND_PROTECT or
+                             ACTIVATE_HIVE)
+  POST /hive/message         One H.I.V.E. engagement turn (HIVE_ACTIVE sessions)
+  POST /hive/end             End H.I.V.E. engagement (→ HIVE_ENDED)
+  POST /investigate          Intelligence + behaviour analysis on HIVE_ENDED session
+  GET  /whatsapp/status      WhatsApp connection state + alert statistics
+  GET  /alerts               All created alerts (most recent first)
+  GET  /alerts/:id           Single alert by alert_id
+  POST /alerts/:id/decision  User action on an alert (BLOCK_AND_PROTECT or
+                             ACTIVATE_HIVE)
+  POST /test/simulate-whatsapp  Simulate incoming WhatsApp message
+                               (TEST_MODE only — SCAMTRACER_TEST_MODE=true)
+  POST /test/reset-alerts    Clear all in-memory alerts (TEST_MODE only)
+
+================================================================================
+15. STATE MACHINE — SESSION FLOW
+================================================================================
+
+Sessions are created by POST /message (when R returns MEDIUM or HIGH risk).
+Sessions are in-memory only (cleared on server restart — demo-level).
+
+  State                  Description
+  ─────────────────────────────────────────────────────────────────────────────
+  NORMAL                 LOW risk — no user action required
+  USER_DECISION_REQUIRED MEDIUM or HIGH risk — user must choose an action
+  BLOCKED                User chose BLOCK & PROTECT — conversation ended safely
+  HIVE_ACTIVE            User explicitly activated H.I.V.E. — engagement active
+  HIVE_ENDED             User ended H.I.V.E. session — ready for investigation
+
+Transitions:
+  POST /message (LOW)       → NORMAL
+  POST /message (MED/HIGH)  → USER_DECISION_REQUIRED
+  POST /decision BLOCK      → BLOCKED
+  POST /decision ACTIVATE   → HIVE_ACTIVE
+  POST /hive/end            → HIVE_ENDED
+
+Enforced state conflicts (HTTP 409):
+  BLOCKED + ACTIVATE_HIVE     → 409 ALREADY_BLOCKED
+  HIVE_ACTIVE + ACTIVATE_HIVE → 409 ALREADY_ACTIVE
+  NORMAL + any decision        → 409 NO_DECISION_REQUIRED
+  HIVE_ENDED + /hive/end       → 409 ALREADY_ENDED
+  Unknown session              → 404 SESSION_NOT_FOUND
+
+Alert states (separate from sessions — for WhatsApp live monitor):
+  USER_DECISION_REQUIRED, BLOCKED, HIVE_ACTIVE, HIVE_ENDED
+
+================================================================================
+16. TEST SUITES AND RESULTS
+================================================================================
+
+  Test File                         Phase  Count  Result   Requires
+  ─────────────────────────────────────────────────────────────────────────
+  tests/test_risk_engine.R           4      69     69/69    R only
+  tests/test_api.R                   5      55     55/55    R Plumber running
+  tests/test_integration.js          6      53     53/53    Both services
+  tests/test_decision_flow.js        7      54     54/54    Both services
+  tests/test_hive_engagement.js      8      63     63/63    Both services
+  tests/test_intelligence_behaviour.R 9     79     79/79    R only
+  tests/test_dashboard.R             10     83     83/83    R only
+  tests/test_whatsapp.js             11/12  54     54/54    Unit: none
+    (+ 19 integration C1–C19, skipped by default — need server)
+  tests/test_extension.js            12     35     35/35    None (E5: server)
+  ─────────────────────────────────────────────────────────────────────────
+  TOTAL (non-integration)                   545    545/545  All passing
+
+================================================================================
+17. ENVIRONMENT VARIABLES
+================================================================================
+
+  Variable                    Default                Purpose
+  ─────────────────────────────────────────────────────────────────────────
+  R_API_URL                   http://localhost:8000  R Plumber API location
+  PORT                        3000                   Node.js server port
+  SCAMTRACER_RISK_THRESHOLD   60                     Min risk_score for alert
+  WHATSAPP_ENABLED            true                   false = no WhatsApp client
+  SCAMTRACER_TEST_MODE        false                  true = enable test endpoints
+
+================================================================================
+18. HOW TO RUN (STEP-BY-STEP)
+================================================================================
+
+PREREQUISITES:
+  - R 4.6.1 installed (https://cran.r-project.org/)
+  - Node.js v20.18.0 (https://nodejs.org/)
+  - Chrome browser (for extension)
+  - Run once: cd "E:/R PROJECT" && Rscript renv_setup.R
+
+--- STEP 1: Start the R Plumber API (Terminal 1) ---
+
+  cd "E:/R PROJECT"
+  Rscript -e 'pr <- plumber::plumb("R/api/plumber.R"); pr$run(host="0.0.0.0", port=8000)'
+
+  Confirm running: curl http://localhost:8000/health
+
+--- STEP 2: Start the Node.js server (Terminal 2) ---
+
+  cd "E:/R PROJECT/nodejs"
+  npm start
+  # Real WhatsApp: QR code appears — scan with WhatsApp on phone
+  # Dev/demo mode: WHATSAPP_ENABLED=false npm start
+
+  Confirm running: curl http://localhost:3000/health
+
+--- STEP 3: Load the Chrome extension ---
+
+  1. Open chrome://extensions/
+  2. Enable "Developer mode"
+  3. Click "Load unpacked"
+  4. Select: E:\R PROJECT\extension\
+
+--- STEP 4: Run the H.I.V.E. demo (Terminal 3, both services must be running) ---
+
+  node "E:/R PROJECT/nodejs/src/runHiveDemo.js"
+
+  This demonstrates:
+    Step 1: Fictional scam message → POST /message → risk_level=HIGH
+    Step 2: R analysis → risk_score=71, prediction=SCAM
+    Step 3: Session created → USER_DECISION_REQUIRED
+    Step 4: ACTIVATE H.I.V.E. → HIVE_ACTIVE (explicit consent)
+    Step 5: 5-turn H.I.V.E. controlled engagement
+    Step 6: POST /hive/end → HIVE_ENDED
+    Step 7: POST /investigate → R extracts entities + behaviour
+    Step 8: Results saved to data/demo/demo_session_output.json
+
+--- STEP 5: Launch the Shiny dashboard (Terminal 3 or 4) ---
+
+  cd "E:/R PROJECT"
+  Rscript -e 'shiny::runApp("dashboard", port=4000, launch.browser=FALSE)'
+  Open: http://localhost:4000
+
+  (Node.js and R Plumber do NOT need to be running for the dashboard.
+   The dashboard calls R analytics functions directly.)
+
+--- TEST ALL PHASES ---
+
+  cd "E:/R PROJECT"
+  Rscript tests/test_risk_engine.R              # Phase 4: 69/69
+  Rscript tests/test_api.R                      # Phase 5: 55/55 (R running)
+  node tests/test_integration.js                # Phase 6: 53/53 (both)
+  node tests/test_decision_flow.js              # Phase 7: 54/54 (both)
+  node tests/test_hive_engagement.js            # Phase 8: 63/63 (both)
+  Rscript tests/test_intelligence_behaviour.R   # Phase 9: 79/79 (R only)
+  Rscript tests/test_dashboard.R                # Phase 10: 83/83 (R only)
+  node tests/test_whatsapp.js                   # Phase 11: 54/54 unit
+  node tests/test_extension.js                  # Phase 12: 35/35
+
+  Phase 11 integration tests (need server on port 3001):
+    SCAMTRACER_TEST_MODE=true WHATSAPP_ENABLED=false PORT=3001 node nodejs/src/server.js &
+    RUN_INTEGRATION=true TEST_PORT=3001 node tests/test_whatsapp.js
+
+--- MANUAL API TESTING ---
+
+  # Submit a message:
+  curl -X POST http://localhost:3000/message \
+    -H "Content-Type: application/json" \
+    -d '{"message": "Your bank account will be suspended. Send the OTP immediately."}'
+  # → Returns session_id + USER_DECISION_REQUIRED + risk_score
+
+  # Make a decision:
+  curl -X POST http://localhost:3000/decision \
+    -H "Content-Type: application/json" \
+    -d '{"session_id": "<id from above>", "action": "ACTIVATE_HIVE"}'
+
+  # WhatsApp status:
+  curl http://localhost:3000/whatsapp/status
+
+  # Get alerts:
+  curl http://localhost:3000/alerts
+
+================================================================================
+19. KNOWN LIMITATIONS
+================================================================================
+
+1. INDIA-SPECIFIC ML SCORES
+   The ML model is trained on UK/Singapore SMS (UCI dataset). India-specific
+   scam patterns (UPI IDs, KYC fraud, OTP fraud, SBI/HDFC terminology) may
+   score as LEGITIMATE by the ML model. The rule-based indicator engine and
+   Phase 9 entity extraction compensate independently. A high indicator_score
+   will push the composite risk_score to MEDIUM or HIGH regardless of ML.
+
+2. IN-MEMORY SESSION AND ALERT STORES
+   Sessions and alerts are in-memory only. They are cleared on server restart.
+   This is acceptable for a college project demo. Production use would require
+   persistent storage.
+
+3. NAIVE BAYES INCOMPATIBILITY
+   Naive Bayes gave degenerate all-spam predictions (AUC=0.50). Expected:
+   Gaussian NB is incompatible with sparse TF-IDF features. If NB is needed,
+   Multinomial NB with raw term counts must be used. Documented as a teaching point.
+
+4. PREDICTION RE-TOKENISES ON EVERY CALL
+   predict_scam() loads and processes the model on each call. Acceptable for
+   demo; would need caching for a high-throughput production service.
+
+5. ENTITY EXTRACTION IS REGEX-ONLY
+   No semantic NLP. Unusual phrasings may not be detected. BANK_NAME uses a
+   curated 20-entry dictionary, not an exhaustive list.
+
+6. EXTENSION INITIAL-ALERT UI REGRESSION
+   The Chrome extension's initial-alert display has a known regression under
+   investigation (Review 3 checkpoint). The backend and analysis pipeline
+   are unaffected.
+
+7. RENV OUT-OF-SYNC WARNING
+   A cosmetic warning may appear when running R scripts. Run renv::snapshot()
+   to resolve if needed.
+
+8. LOCAL DEVELOPMENT ONLY
+   No authentication, no HTTPS, no rate limiting, no production hardening.
+   Suitable for college project demonstration only.
+
+================================================================================
+20. IMPORTANT DESIGN DECISIONS
+================================================================================
+
+ 1. R is the ONLY analytical technology. Node.js never calculates risk scores,
+    performs ML inference, or analyses text.
+
+ 2. Node.js is the ONLY communication technology. R never handles HTTP directly
+    (except via Plumber which is R's web framework).
+
+ 3. User consent model: H.I.V.E. is NEVER activated automatically. Even a
+    risk_score of 100 only creates a USER_DECISION_REQUIRED state. The user
+    must explicitly call POST /decision with action=ACTIVATE_HIVE.
+
+ 4. No fabricated data: All model metrics, EDA statistics, entity extractions,
+    and behaviour detections come from real function calls. Nothing is invented.
+
+ 5. 60/40 ML-to-indicator split: ML is primary evidence (60%); indicators are
+    supplementary and capped at 40%. This prevents false HIGH ratings from
+    heuristics alone.
+
+ 6. lambda.1se for glmnet: Prefers simpler model. Reduces overfitting on the
+    508-dimensional sparse feature space.
+
+ 7. vapply over sapply in indicator_summary(): Handles empty indicator lists
+    safely without type coercion surprises.
+
+ 8. UPI vs email disambiguation: Same base regex matches both. Emails are
+    classified by requiring a TLD (\.[A-Za-z]{2,}$). UPI IDs (no TLD) are
+    classified separately. No double-counting.
+
+ 9. Digit-required TRANSACTION_ID: Pattern requires at least one digit to
+    prevent matching plain English words when ignore_case=TRUE.
+
+10. NULL text guard in R list processing: as.character(NULL) returns
+    character(0), not NA. Guard: if (!is.null(t$text)) as.character(t$text)
+    else NA_character_.
+
+11. simplifyVector=FALSE in POST /investigate: Preserves conversation as
+    list-of-lists rather than coercing to a data frame.
+
+12. source(..., local=environment()) in Plumber: Makes R functions visible to
+    handler closures in the Plumber router's private environment.
+
+13. Chrome extension HTTP via service worker: Content scripts cannot make HTTP
+    requests from an HTTPS page to localhost. All HTTP goes through background.js.
+
+14. Defence-in-depth for alert creation: 5 validation layers:
+    plumber.R (NA_real_ not NULL) → normalizeWhatsAppMessage → validateRiskResult
+    → processIncomingWhatsAppMessage guard → createAlert guard.
+
+================================================================================
+21. WHAT IS AND IS NOT IMPLEMENTED
+================================================================================
+
+FULLY IMPLEMENTED AND TESTED:
+  ✓ Data cleaning pipeline (cleaner.R) — 5,171 rows processed
+  ✓ TF-IDF feature engineering (text_features.R) — 510 features
+  ✓ ML model training + evaluation (classifier.R) — 3 models, 1 selected
+  ✓ Risk scoring engine (risk_scorer.R) — analyze_risk() + predict_scam()
+  ✓ Rule-based indicator engine (helpers.R) — 14 indicators
+  ✓ R Plumber REST API (plumber.R) — /health + /analyze + /investigate
+  ✓ Node.js communication layer (server.js) — 12 endpoints
+  ✓ R Plumber API client (rApiClient.js)
+  ✓ Session state machine (sessionStore.js) — 5 states
+  ✓ H.I.V.E. response engine (hiveEngine.js) — 7 strategies × 3 templates
+  ✓ Alert store (alertStore.js) — deduplication, ALERT_STATES enum
+  ✓ WhatsApp monitor (whatsappClient.js) — EventEmitter, QR auth, detection
+  ✓ Risk result validator (riskResultValidator.js)
+  ✓ Analysis terminal logger (analysisLogger.js)
+  ✓ Intelligence extraction (intelligence_extractor.R) — 9 entity types
+  ✓ Behaviour analysis (behaviour_analyzer.R) — 8 pattern categories
+  ✓ R Shiny dashboard (7 tabs including Live Monitor)
+  ✓ Chrome MV3 extension (floating panel, service worker, toolbar popup)
+  ✓ End-to-end H.I.V.E. demo runner (runHiveDemo.js)
+  ✓ All 545 automated test checks passing
+
+PLACEHOLDER ONLY (file exists, minimal logic):
+  ~ R/main.R                    — R engine entry point (placeholder)
+  ~ R/network/entity_graph.R    — Entity correlation graph (placeholder)
+
+NOT IMPLEMENTED:
+  ✗ Entity correlation / graph analysis (igraph-based cross-session network)
+  ✗ Live investigation integration in Shiny tabs 1–6
+    (tabs 1–6 always show the fixed demo scenario; only tab 7 is live)
+  ✗ Investigation report export (PDF/HTML generation)
+  ✗ Persistent session storage (sessions cleared on server restart)
+  ✗ HTTPS / authentication / rate limiting (local dev only)
+
+================================================================================
+END OF DOCUMENTATION
+================================================================================
